@@ -15,6 +15,13 @@ from openmm import *
 from openmm.unit import *
 
 
+nonbonded_methods = {'NoCutoff': NoCutoff,
+                     'CutoffNonPeriodic': CutoffNonPeriodic,
+                     'CutoffPeriodic': CutoffPeriodic,
+                     'Ewald': Ewald,
+                     'PME': PME}
+
+
 class ForceFieldHandler():
     """
     A Class for parameterization of a structure file. Returns the necessary elements to construct an openmm simulation, System, Topology, and Positions.
@@ -129,16 +136,13 @@ class ForceFieldHandler():
             raise Exception(f'The extension {ext} was not recognized!')
         return mode
 
-    def main(self, use_nonbonded: bool=True):
+    def main(self, use_pme: bool=True):
         """
         The intended main usage case.  Parameterize ligands from an SDF file with OpenFF (.offxml) parameters and
         environment/protein from a PDB file with OpenMM (.xml) parameters.
 
         Paremeters:
-            use_rdkit: bool: Default=False - When a custom force field for the ligand is necessary, and the ligand is 
-                a pdb file, this should be True.  Takes an intermediate step to load an RDKit molecule from the pdb file
-                and then load an OpenFF molecule from the RDKit molecule - as opposed to loading the OpenFF molecule directly
-                from the structure file.
+            use_pme: Default True: Use the PME nonbonded method.  Otherwise uses openmm default of NoCutOff
         Returns:
             (sys, top, positions): tuple - A 3-tuple of OpenMM System, OpenMM Topology, and coordinate array of positions
         """
@@ -159,7 +163,11 @@ class ForceFieldHandler():
             ff = ForceField(*self.xmls)
             pdb = PDBFile(self.structure_file)
             top, positions = pdb.getTopology(), pdb.getPositions()
-            if use_nonbonded:
+
+            if type(use_pme) == str:
+                sys = ff.createSystem(top, nonbondedMethod=nonbonded_methods[use_pme])
+            
+            if use_pme: #This logic block needs to be default
                 sys = ff.createSystem(top, nonbondedMethod=PME) 
             else:
                 sys = ff.createSystem(top)

@@ -6,6 +6,7 @@ from modeller.automodel import *
 import mdtraj as md
 import numpy as np
 import MDAnalysis as mda
+from MDAnalysis.analysis.align import alignto
 from pdbfixer import PDBFixer
 from openmm.app import PDBFile
 from datetime import datetime
@@ -89,7 +90,7 @@ class RepairProtein():
         self.fasta_name = fasta_fn.split('/')[-1].split('.')[0]
         self.working_dir = working_dir
         if not os.path.exists(self.working_dir):
-            os.mkdir(self.working_dir)
+            os.makedirs(self.working_dir, exist_ok=True)
         self.name = self.pdb_fn.split('.pdb')[0]
         try:
             self.name = self.name.split('/')[-1]
@@ -178,21 +179,21 @@ class RepairProtein():
             if tails == True:
                 pass
             else:
-                traj = md.load_pdb(self.pdb_out_fn)
+                traj = md.load_pdb(os.path.join(self.working_dir, self.pdb_out_fn))
                 top = traj.topology
                 resid_range = ' '.join(str(i) for i in range(tails[0], tails[1]))
                 sele = top.select(f'resid {resid_range}')
                 traj = traj.atom_slice(sele)
-                traj.save_pdb(self.pdb_out_fn)
+                traj.save_pdb(os.path.join(self.working_dir, self.pdb_out_fn))
 
         
         # Fix missing residues if cutting tails created improper terminals
         if not self.cyclic:
-            fixer = PDBFixer(self.pdb_out_fn)
+            fixer = PDBFixer(os.path.join(self.working_dir, self.pdb_out_fn))
             fixer.findMissingResidues()
             fixer.findMissingAtoms()
             fixer.addMissingAtoms()
-            PDBFile.writeFile(fixer.topology, fixer.positions, open(self.pdb_out_fn, 'w'), keepIds=True)
+            PDBFile.writeFile(fixer.topology, fixer.positions, open(os.path.join(self.working_dir, self.pdb_out_fn), 'w'), keepIds=True)
 
         # Reinsert CRYS entry
         crys_line = ''
@@ -202,28 +203,28 @@ class RepairProtein():
                     crys_line = f'{line}'
         f.close()
 
-        with open(self.pdb_out_fn, 'r') as f:
+        with open(os.path.join(self.working_dir, self.pdb_out_fn), 'r') as f:
             pdb_lines = f.readlines()
         f.close()
 
         pdb_lines[0] = crys_line
-        with open(self.pdb_out_fn, 'w') as f:
+        with open(os.path.join(self.working_dir, self.pdb_out_fn), 'w') as f:
             for line in pdb_lines:
                 f.write(line)
 
         # Alignment correction
         if align_after:
-            u = mda.Universe(self.pdb_out_fn)
+            u = mda.Universe(os.path.join(self.working_dir, self.pdb_out_fn))
             resids = u.atoms.resids
             ref_u = mda.Universe(temp_pdb)
             ref_resids = ref_u.atoms.resids
             matching_resids = np.intersect1d(resids, ref_resids)
             b, a = mda.analysis.align.alignto(u, ref_u, select=f'name CA and resid {" ".join(str(r) for r in matching_resids)}')
-            u.atoms.write(self.pdb_out_fn)
+            u.atoms.write(os.path.join(self.working_dir, self.pdb_out_fn))
             os.remove(temp_pdb)
             
             print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//Moved protein from', b, 'to', a, flush=True)
-        print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//Protein Repaired. Output written to:', self.pdb_out_fn, flush=True)
+        print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//Protein Repaired. Output written to:', os.path.join(self.working_dir, self.pdb_out_fn), flush=True)
 
     
             

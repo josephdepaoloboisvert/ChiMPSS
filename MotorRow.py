@@ -44,7 +44,7 @@ class MotorRow():
             self.abs_work_dir = os.path.join(os.getcwd(), working_directory)
         #Ensure that the working dir exists, and if not create it
         if not os.path.isdir(self.abs_work_dir):
-            os.mkdir(self.abs_work_dir)
+            os.makedirs(self.abs_work_dir, exist_ok=True)
         #Get the system xml file (we want to create a system fresh from this every time)
         if system_xml is None or os.path.isabs(system_xml):
             pass
