@@ -6,6 +6,7 @@ from openmmtools.utils.utils import TrackedQuantity
 from openmmtools import states, mcmc, multistate
 from openmmtools.states import SamplerState, ThermodynamicState
 from openmmtools.multistate import ParallelTemperingSampler, ReplicaExchangeSampler, MultiStateReporter
+from openmmtools.integrators import MTSIntegrator as unique_integrator_name
 import tempfile
 import os, sys
 sys.path.append('../MotorRow')
@@ -175,13 +176,25 @@ class Randolph():
         """
         """
         # Set up integrator
-        move = mcmc.LangevinDynamicsMove(timestep=self.dt * unit.femtosecond, collision_rate=1.0 / unit.picosecond, n_steps=self.n_steps_per_iter, reassign_velocities=False)
+        # integrator = mtsintegrator.MTSLangevinIntegrator(temperature=310.0,
+        #                                                  friction=1.0,
+        #                                                  dt=4.0,
+        #                                                  groups=[(0,2),(1,1)])
+        #integrator = unique_integrator_name(timestep=4.0, groups=[(0,2),(1,1)])
+        #Groups are (force_group, evals / dt)
+        # This should be the highest timestep specified, bond group more frequent
+        #move = mcmc.IntegratorMove(integrator, n_steps=self.n_steps_per_iter, reassign_velocities=False)
+
+        move = mcmc.LangevinDynamicsMove(timestep=self.dt * unit.femtosecond, collision_rate=1.0 / unit.picosecond,
+                                         n_steps=self.n_steps_per_iter, reassign_velocities=False)
         
         # Set up simulation
         if self.spring_centers is not None:
-            self.simulation = ReplicaExchangeSampler(mcmc_moves=move, number_of_iterations=self.n_iters)
+            self.simulation = ReplicaExchangeSampler(mcmc_moves=move, number_of_iterations=self.n_iters,
+                                                       replica_mixing_scheme='swap-all')
         else:
-            self.simulation = ParallelTemperingSampler(mcmc_moves=move, number_of_iterations=self.n_iters)
+            self.simulation = ParallelTemperingSampler(mcmc_moves=move, number_of_iterations=self.n_iters,
+                                                       replica_mixing_scheme='swap-all')
         self.simulation._global_citation_silence = True
 
         # Remove existing .ncdf files
@@ -195,7 +208,7 @@ class Randolph():
         if self.spring_centers is not None:
             self.simulation.create(thermodynamic_states=self.thermodynamic_states, sampler_states=self.sampler_states, storage=self.reporter)
         else:
-            self.simulation.create(thermodynamic_state=self.thermodynamic_states[0], sampler_states=self.sampler_states,
+            self.simulation.create(thermodynamic_state=self.thermodynamic_states[0], sampler_states=self.sampler_states[0],
                                    storage=self.reporter, temperatures=self.temperatures, n_temperatures=self.n_replicates)   
 
     

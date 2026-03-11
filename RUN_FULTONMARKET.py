@@ -1,78 +1,44 @@
-"""
-USAGE: python REPLICA_EXCHANGE.py $INPUT_DIR $NAME $OUTPUT_DIR $REPLICATE $SIM_TIME $NUM_OF_REPLICA 
+#RUN SOME FUCKING HMR BIG TIMESTEP ENERGY BOIIII
 
-PARAMETERS:
------------
-    INPUT_DIR: absolute path to the directory with input xml and pdb
-    NAME: pdb file before the extension
-    OUTPUT_DIR: absolute path to the directory where a subdirectory with output will be stored
-    REPLICATE: Replicate number of simulation. THIS MUST BE SPECIFIED to avoid accidental overwritting
-    SIM_TIME: Total simulation aggregate time. Default is 500 ns. 
-    NUM_OF_REPLICA: number of replica to start with between T_min (300 K) and T_max (360 K)
-"""
+#MY TESTING SYSTEM
+# input_pdb='/expanse/lustre/projects/uil133/josephdb/SimulationData/AM630_fg_MotorRow/Step_5.pdb'
+# input_system='/expanse/lustre/projects/uil133/josephdb/ChiMPSS/for_Jo/AM630_FG_HMR_sys.xml'
+# input_state='/expanse/lustre/projects/uil133/josephdb/SimulationData/AM630_fg_MotorRow/Step_5.xml'
+# output_dir='/expanse/lustre/projects/uil133/josephdb/SimulationData/AM630_HMR_3.5_FultonMarket/'
 
-
-import os, sys, argparse
-import numpy as np
-
-# Arguments
+import argparse, os
 parser = argparse.ArgumentParser()
-parser.add_argument('input_dir', help="absolute path to the directory with input xml and pdb")
-parser.add_argument('name', help="pdb file before the extension")
-parser.add_argument('output_dir', help="absolute path to the directory where a subdirectory with output will be stored")
-parser.add_argument('replicate', help="replicate number of simulation. THIS MUST BE SPECIFIED to avoid accidental overwritting")
-parser.add_argument('--no-context', action='store_true', help="if this option is chosen, do not use and openMM state to contextualize the simulation. recommended to continuing simulations only.")
-parser.add_argument('-c', '--convergence-thresh', default=None, type=float, help='amount of time (ns) the simulation needs to be converged according to the mean weighted reduced cartesians of resampled frames. Default is None, but 350 is recommended. If this is not None, then this criterion will be used over total simulation time (see below).')
-parser.add_argument('-r', '--resSeqs-npy', default=None, type=str, help='path to numpy array of resSeqs to use to compute the PCA and evaluate the mean weighted reduced cartesians. If convergence_thresh is not None, this option should be specified. Default is None.')
-parser.add_argument('-t', '--total-sim-time', default=None, type=int, help="aggregate simulation time from all replicates in nanoseconds. Default is None. If this option is specified and convergence_thresh is None, then this criterion will be used to evaluate when the simulation is complete.")
-parser.add_argument('-s', '--sub-sim-length', default=50, type=int, help="   Amount of time for each sub simulation in nanoseconds. This value dictates how often .ncdf objects are truncated, data is store, resampling occures, PCA analysis occurs, andconvergence criterion is evaluated. Default is 50, but 25 is recommended.")
-parser.add_argument('-n', '--n-replica', default=100, help="number of replica to start with between T_min (300 K) and T_max (360 K)", type=int)
-parser.add_argument('-x', '--sele-str', nargs='+', default=None, type=str, help='ligand selection string for mdtraj')
-parser.add_argument('-i', '--iter-length', default=0.001, type=float, help='Length of iteration (ns)')
+parser.add_argument('input_pdb', type=str, help='Path to PDB File with starting coordinates')
+parser.add_argument('input_system', type=str, help='Path to the XML File with the serialized system')
+parser.add_argument('output_dir', type=str, help='Directory to store output')
+parser.add_argument('--input_state', default=None, type=str, help='Path to XML File of a recently written state')
+parser.add_argument('--T_min', default=310, type=float, help='Lowest Temperature on the Temperature ladder')
+parser.add_argument('--T_max', default=350, type=float, help='Highest Temperature on the Temperature ladder')
+parser.add_argument('--n_replicates', default=40, type=int, help='Number of states (temperatures) for Replica Exchange')
+parser.add_argument('--iter_length', default=0.010, type=float, help='Time (nanoseconds) between swaps')
+parser.add_argument('--timestep', default=3.5, type=float, help='Time (femtoseconds) for the integration steps')
+parser.add_argument('--sim_length', default=35, type=int, help='Time (nanoseconds) between checkpointed folder creations')
+parser.add_argument('--total_sim_time', default=3500, type=int, help='Time (nanoseconds) of desired aggregate simulation (across replicates)')
+
 args = parser.parse_args()
 
-sys.path.append('FultonMarket')
-from FultonMarket import FultonMarket
+from FultonMarket.FultonMarket import FultonMarket as FM
 
-if __name__ == '__main__':
+market = FM(input_pdb=args.input_pdb,
+            input_system=args.input_system,
+            input_state=args.input_state, 
+            T_min=args.T_min,
+            T_max=args.T_max,
+            n_replicates=args.n_replicates)
 
-    # Inputs
-    input_dir = args.input_dir
-    name = args.name
-    input_sys = os.path.join(input_dir, name+'_sys.xml')
-    if args.resSeqs_npy is not None:
-        resSeqs = np.load(args.resSeqs_npy)
-    else:
-        resSeqs = None
-    if args.no_context:
-        input_state = None
-    else:
-        input_state = os.path.join(input_dir, name+'_state.xml')
-    
-    input_pdb = os.path.join(input_dir, name+'.pdb')
-    if args.sele_str is not None:
-        sele_str = ' '.join(args.sele_str)
-    else:
-        sele_str = None    
-    # Outputs
-    output_dir = os.path.join(sys.argv[3], name + '_' + str(args.replicate))
-    if not os.path.exists(output_dir):
-        os.mkdir(output_dir)
-    assert os.path.exists(output_dir)
+if not os.path.isdir(args.output_dir):
+    print(f"Creating an Output Directory at: {args.output_dir}")
+    os.makedirs(args.output_dir, exist_ok=True)
 
-    
-    # Run rep exchange
-    market = FultonMarket(input_pdb=input_pdb, 
-                          input_system=input_sys, 
-                          input_state=input_state, 
-                          n_replicates=args.n_replica,
-                          sele_str=sele_str)
-    
-    market.run(iter_length=args.iter_length,
-              dt=2.0,
-              sim_length=args.sub_sim_length,
-              convergence_thresh=args.convergence_thresh,
-              resSeqs=resSeqs,
-              total_sim_time=args.total_sim_time,
-              output_dir=output_dir)
-    
+market.run(iter_length=args.iter_length,
+           dt=args.timestep,
+           sim_length=args.sim_length,
+           total_sim_time=args.total_sim_time,
+           output_dir=args.output_dir)
+
+
