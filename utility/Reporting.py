@@ -1,6 +1,7 @@
 from datetime import datetime
 
 timestamp = lambda x: f"{datetime.now()}://{x}"
+printf = lambda x : print(f"{datetime.now().strftime("%m/%d/%Y %H:%M:%S")}//{x}", flush=True)
 
 def unique_residues(t):
     unique_residues = {}
