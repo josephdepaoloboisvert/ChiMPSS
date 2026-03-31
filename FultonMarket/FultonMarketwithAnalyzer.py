@@ -123,7 +123,12 @@ class FultonMarket():
             minimum_fraction: float = 0.25,
             init_overlap_thresh: float = 0.5,
             term_overlap_thresh: float = 0.35,
-            output_dir: str = os.path.join(os.getcwd(), 'FultonMarket_output/')):
+            output_dir: str = os.path.join(os.getcwd(), 'FultonMarket_output/'),
+            n_resample: int = 1000,
+            max_equil_fraction: float = 0.75,
+            frobenius_thresh: float = 0.05,
+            jsd_thresh: float = 0.10,
+            getContacts_Info: dict = None):
         """
         Run parallel tempering replica exchange.
 
@@ -149,8 +154,35 @@ class FultonMarket():
             before triggering a restart. Default 0.35.
         output_dir : str
             Path to output directory. Default: 'FultonMarket_output/' in cwd.
+        n_resample : int
+            Number of frames to importance resample per convergence check.
+            Default 1000.
+        max_equil_fraction : float
+            Maximum fraction of the simulation that can be discarded as
+            equilibration before convergence is considered unreliable.
+            Default 0.75.
+        frobenius_thresh : float
+            Maximum normalised Frobenius norm between the current and any
+            previous checkpoint distance matrix for convergence. Default 0.05.
+        jsd_thresh : float
+            Maximum Jensen-Shannon Divergence between the current and any
+            previous checkpoint pairwise distance distribution for convergence.
+            Default 0.10.
+        getContacts_Info : dict, optional
+            Keyword arguments forwarded to getContactDistanceMatrix. Required
+            keys when contact convergence is used:
+              - getcontacts_script (str): path to get_dynamic_contacts.py
+              - conda_env (str): name of the conda env containing getContacts;
+                the current env is auto-discovered from CONDA_PREFIX and its
+                name is replaced with this value to locate the interpreter
+            Optional keys:
+              - getcontacts_python (str): explicit Python interpreter path;
+                when provided, conda_env is ignored
+              - cores (int): number of CPU cores for getContacts, default 10
+            If None, contact distance matrix convergence will raise an error
+            when first attempted.
         """
-        
+
         # Store run parameters
         self.total_sim_time = total_sim_time
         self.iter_length = iter_length
@@ -159,6 +191,11 @@ class FultonMarket():
         self.init_overlap_thresh = init_overlap_thresh
         self.term_overlap_thresh = term_overlap_thresh
         self.minimum_fraction4convergence = minimum_fraction
+        self.n_resample = n_resample
+        self.max_equil_fraction = max_equil_fraction
+        self.frobenius_thresh = frobenius_thresh
+        self.jsd_thresh = jsd_thresh
+        self.getContacts_Info = getContacts_Info if getContacts_Info is not None else {}
 
         # Prepare output directories
         self.output_dir = output_dir
@@ -168,15 +205,20 @@ class FultonMarket():
         self.save_dir = os.path.join(output_dir, 'saved_variables')
         os.makedirs(self.save_dir, exist_ok=True)
 
-        printf(f'total_sim_time   : {self.total_sim_time} ns')
-        printf(f'iter_length      : {self.iter_length} ns')
-        printf(f'dt               : {self.dt} fs')
-        printf(f'sim_length       : {self.sim_length} ns')
-        printf(f'n_replicates     : {self.n_replicates}')
+        printf(f'total_sim_time      : {self.total_sim_time} ns')
+        printf(f'iter_length         : {self.iter_length} ns')
+        printf(f'dt                  : {self.dt} fs')
+        printf(f'sim_length          : {self.sim_length} ns')
+        printf(f'n_replicates        : {self.n_replicates}')
         printf(f'init_overlap_thresh : {self.init_overlap_thresh}')
         printf(f'term_overlap_thresh : {self.term_overlap_thresh}')
-        printf(f'output_dir       : {self.output_dir}')
-        printf(f'temperatures     : {[np.round(T._value, 1) for T in self.temperatures]} K')
+        printf(f'output_dir          : {self.output_dir}')
+        printf(f'temperatures        : {[np.round(T._value, 1) for T in self.temperatures]} K')
+        printf(f'n_resample          : {self.n_resample}')
+        printf(f'max_equil_fraction  : {self.max_equil_fraction}')
+        printf(f'frobenius_thresh    : {self.frobenius_thresh}')
+        printf(f'jsd_thresh          : {self.jsd_thresh}')
+        printf(f'getContacts_Info    : {self.getContacts_Info}')
 
         self._configure_experiment_parameters()
 
@@ -192,7 +234,13 @@ class FultonMarket():
                                  term_overlap_thresh=term_overlap_thresh)
 
             self._save_sub_simulation()
-            self.finished = self._evaluate_stopping_criterion()
+            self.finished = self._evaluate_stopping_criterion(
+                n_resample=self.n_resample,
+                max_equil_fraction=self.max_equil_fraction,
+                frobenius_thresh=self.frobenius_thresh,
+                jsd_thresh=self.jsd_thresh,
+                getContacts_Info=self.getContacts_Info,
+            )
             self.sim_no += 1
 
 
@@ -432,7 +480,7 @@ class FultonMarket():
         return velocities, positions, box_vectors, state_inds
 
 
-    def _evaluate_stopping_criterion(self, n_resample=1000, max_equil_fraction=0.75, frobenius_thresh=0.05, jsd_thresh=0.10):
+    def _evaluate_stopping_criterion(self, n_resample=1000, max_equil_fraction=0.75, frobenius_thresh=0.05, jsd_thresh=0.10, getContacts_Info=None):
         """
         Check whether the simulation should stop by evaluating a series of
         convergence criteria against the current and all previously saved
@@ -454,15 +502,21 @@ class FultonMarket():
         Parameters
         ----------
         n_resample : int
-            Number of frames to importance resample. Default 100.
+            Number of frames to importance resample. Default 1000.
+        max_equil_fraction : float
+            Maximum fraction of the simulation discardable as equilibration
+            before convergence is considered unreliable. Default 0.75.
         frobenius_thresh : float
             Maximum normalised Frobenius norm between the current and any
             previous checkpoint matrix for convergence. Default 0.05.
         jsd_thresh : float
             Maximum Jensen-Shannon Divergence between the current and any
             previous checkpoint pairwise distance distribution for convergence.
-            Bounded in [0, 1]. Default 0.05.
- 
+            Bounded in [0, 1]. Default 0.10.
+        getContacts_Info : dict, optional
+            Keyword arguments forwarded directly to getContactDistanceMatrix.
+            See run() docstring for accepted keys. Default None.
+
         Returns
         -------
         bool
@@ -495,6 +549,7 @@ class FultonMarket():
             top_fn=os.path.join(sim_dir, 'resampled_top.pdb'),
             traj_fn=os.path.join(sim_dir, 'resampled_trj.dcd'),
             output_fn=os.path.join(sim_dir, 'resampled_contacts.tsv'),
+            **(getContacts_Info if getContacts_Info is not None else {}),
         )
         current_matrices = {
             'torsion':      torsional,

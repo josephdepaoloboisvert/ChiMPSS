@@ -408,17 +408,67 @@ def getAlphaCarbonDistanceMatrix(traj, selection_string=None):
     return distance_matrix
 
 
-def getContactDistanceMatrix(top_fn, traj_fn, output_fn, conda_env='pyinteraph2', getcontacts_script=None, getcontacts_python=None):
+def getContactDistanceMatrix(top_fn, traj_fn, output_fn, conda_env=None, getcontacts_script=None, getcontacts_python=None, cores: int = 10):
     """
-    Switch to a known conda environment and run getContacts.  Then switch back...
+    Run getContacts in a specified conda environment and compute a frame x frame
+    contact distance matrix.
+
+    Parameters
+    ----------
+    top_fn : str
+        Path to topology PDB file.
+    traj_fn : str
+        Path to trajectory DCD file.
+    output_fn : str
+        Path for the getContacts TSV output file.
+    conda_env : str, optional
+        Name of the conda environment containing getContacts. The current
+        environment is discovered automatically from CONDA_PREFIX and its name
+        is replaced with conda_env to resolve the target Python interpreter.
+        Required when getcontacts_python is not provided.
+    getcontacts_script : str
+        Path to the get_dynamic_contacts.py script. Required.
+    getcontacts_python : str, optional
+        Explicit path to the Python interpreter to use. When provided,
+        conda_env is ignored entirely.
+    cores : int
+        Number of CPU cores passed to getContacts via --cores. Default 10.
     """
-    
-    conda_python = os.path.join(os.environ['CONDA_PREFIX'].replace('replica2',conda_env),'bin','python')
-    cmd = [conda_python, '/expanse/lustre/projects/uil133/josephdb/getcontacts/get_dynamic_contacts.py' if not getcontacts_script else getcontacts_script,
+    if getcontacts_script is None:
+        raise RuntimeError(
+            "getcontacts_script must be provided. "
+            "Pass the path to get_dynamic_contacts.py via getContacts_Info."
+        )
+
+    if getcontacts_python is not None:
+        conda_python = getcontacts_python
+    else:
+        if conda_env is None:
+            raise RuntimeError(
+                "conda_env must be specified when getcontacts_python is not provided. "
+                "Pass conda_env in getContacts_Info."
+            )
+        conda_prefix = os.environ.get('CONDA_PREFIX', '')
+        if not conda_prefix:
+            raise RuntimeError(
+                "CONDA_PREFIX is not set and getcontacts_python was not provided. "
+                "Provide getcontacts_python explicitly via getContacts_Info."
+            )
+        current_env = os.path.basename(conda_prefix)
+        printf(f"Detected current conda env: '{current_env}' — switching to: '{conda_env}'")
+        conda_python = os.path.join(conda_prefix.replace(current_env, conda_env), 'bin', 'python')
+        if not os.path.exists(conda_python):
+            raise RuntimeError(
+                f"Cannot locate Python at '{conda_python}'. "
+                f"Resolved by replacing '{current_env}' with '{conda_env}' in CONDA_PREFIX. "
+                "Provide getcontacts_python explicitly via getContacts_Info."
+            )
+
+    cmd = [conda_python, getcontacts_script,
            '--topology', top_fn,
            '--trajectory', traj_fn,
            '--output', output_fn,
-           '--cores', '10',
+           '--cores', str(cores),
            '--sele', 'protein or resname UNK',
            '--ligand', 'resname UNK',
            '--lipid', 'resname POP',
