@@ -156,7 +156,7 @@ class Randolph():
         self.n_iters_per_cycle = np.ceil(self.n_iters / self.n_cycles)
         print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//' + 'Calculated number of iters per cycle to be', self.n_iters_per_cycle, 'iterations', flush=True) 
 
-        self.checkpoint_interval = int(0.01 / self.iter_length)
+        self.checkpoint_interval = int(0.02 / self.iter_length) #CHANGE ME BACK
         print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//' + 'Calculated checkpoint interval to be', self.checkpoint_interval, 'iterations', flush=True) 
 
 

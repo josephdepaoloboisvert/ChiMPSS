@@ -1,47 +1,43 @@
-"""
-Imports within this module
-
-Lambda Functions and Variables
-geometric_distribution(a, b, c) - create a geometric (logarithmic) distribution from a to b with c values
-spring_constant_unit - openmm.unit with units of Joule/(mol*Angstrom^2)
-rmsd(a, b) - If a is a single frame and b a trajectory, calculates the rmsd of traj b w.r.t. a
-             If a and b are trajectories of the same size, calculates the frame to frame
-printf(string) - Shorthand print statement, also prints the current date and time, invoking the flush=True argument
-
-Functions
-convert_to_TrackedQuantity(np.array, openmm.unit) - Converts a numpy array to a tracked Quantity array with the provided unit
-swap_traj_env(traj1, traj2)
-build_thermodynamic_states(self)
-restrain_atoms(self)
-build_sampler_states(self)
-truncate_netcdf(ncdf_in, ncdf_out, reporter, is_checkpoint: bool=False)
-make_interpolated_positions_array(spring_centers1_pdb, spring_centers2_pdb, num_replicates)
-make_interpolated_positions_array_from_selections(spring_centers1_pdb, selection_1, spring_centers2_pdb, num_replicates, selection_2=None):
-restrain_atoms_by_dsl(thermodynamic_state, topology, atoms_dsl, spring_constant, spring_center)
-restrain_atoms_by_index(thermodynamic_state, restrained_atom_indices, spring_constant, spring_center)
-restrain_openmm_system_by_dsl(openmm_system, topology, atoms_dsl, spring_constant, spring_center, preselected_centers=True)
-"""
-
-import numpy as np
-import netCDF4 as nc
-from openmmtools.states import SamplerState, ThermodynamicState
-from openmmtools.utils.utils import TrackedQuantity
+import glob, itertools, jax, math, mpiplus, os, sys, subprocess
+from copy import deepcopy
+from datetime import datetime
+import matplotlib.pyplot as plt
 import mdtraj as md
+import netCDF4 as nc
+import numpy as np
+import jax.numpy as jnp
 from openmm import *
 from openmm.app import *
 import openmm.unit as unit
-import math, mpiplus
-from datetime import datetime
-from copy import deepcopy
+from openmmtools.states import SamplerState, ThermodynamicState
+from openmmtools.utils.utils import TrackedQuantity
+from pymbar import timeseries, MBAR
+from pymbar.timeseries import detect_equilibration
+import scipy.constants as cons
+from scipy.spatial.distance import jensenshannon
+from scipy.stats import pearsonr, spearmanr
+import seaborn as sns
+from sklearn.decomposition import PCA
+from typing import List, Literal
+import warnings
+warnings.filterwarnings('ignore')
 
+from .ContactNetwork import ContactNetworkBuilder
+
+
+printf = lambda my_string: print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + ' // ' + str(my_string), flush=True)
+get_kT = lambda temp: temp*cons.gas_constant
 geometric_distribution = lambda min_val, max_val, n_vals: [min_val + (max_val - min_val) * (math.exp(float(i) / float(n_vals-1)) - 1.0) / (math.e - 1.0) for i in range(n_vals)]
 
 spring_constant_unit = (unit.joule)/(unit.angstrom*unit.angstrom*unit.mole)
 
 rmsd = lambda a, b: np.sqrt(np.mean(np.sum((b-a)**2, axis=-1), axis=-1))
 
-printf = lambda x: print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//' + x, flush=True)
-
+perms = jnp.array([x for x in itertools.product([-1, 0, 1], repeat=3)])
+jaxrmsd = lambda a, b: jnp.sqrt(jnp.mean(jnp.sum((b-a)**2, axis=-1), axis=-1))
+jax_add = lambda a, b: a+b
+jax_add = jax.vmap(jax_add, in_axes=(0, None))
+rmsd_j = jax.vmap(jaxrmsd, in_axes=(0, None))
 
 def convert_to_TrackedQuantity(arr: np.array, u: openmm.unit):
     return TrackedQuantity(unit.Quantity(value=np.ma.masked_array(data=arr, mask=False, fill_value=1e+20), unit=u))
@@ -177,7 +173,396 @@ def truncate_ncdf(ncdf_in, ncdf_out, out_dir, reporter, is_checkpoint: bool=Fals
         return pos, velocities, box_vecs, states, energies, temps
         
 
+def rmsd(a, b):
+    if len(a.shape) == 1:
+        return np.sqrt(((a - b)**2).sum(-1).mean())
+    else:
+        return np.array([np.sqrt(((a[i] - b[i])**2).sum(-1).mean()) for i in range(a.shape[0])])
+
+def plot_MRC(domains, mean_weighted_rc, mean_weighted_rc_err, savefig: str=None):
+
+    fig, ax = plt.subplots()
+    
+    ax.plot(domains, mean_weighted_rc, color='k')
+    ax.errorbar(domains, np.abs( mean_weighted_rc - mean_weighted_rc[-1]), yerr=mean_weighted_rc_err, color='k', capsize=3)
+    ax.set_ylabel('| MRC(t) - MRC(T) |')
+    ax.set_xlabel('Total sim time (ns')
+    plt.show()
+
+    if savefig is not None:
+        fig.savefig(savefig)
 
 
+def PCA_convergence_detection(rc, rc_err):
 
+    converged = np.array([False for i in range(len(rc)-1)])
+    for i, (rc_i, rc_err_i) in enumerate(zip(rc[:-1], rc_err[:-1])):
+        if (rc_i > rc[-1] and rc_i - rc_err_i <= rc[-1]) or (rc_i <= rc[-1] and rc_i + rc_err_i >= rc[-1]):
+            converged[i] = True
+        else:
+            converged[:i+1] = False
+
+    return converged
+
+
+def write_traj_from_pos_boxvecs(pos, box_vec, top, sele_str, receptor_sele_str='chainid 0', correction: bool=True):        
+    
+    # Create traj obj
+    traj = md.Trajectory(xyz=pos.copy(), 
+                         topology=top, 
+                         time=np.arange(pos.shape[0]), 
+                         unitcell_lengths=box_vec.sum(axis=1), 
+                         unitcell_angles=np.repeat([90,90,90], pos.shape[0]).astype(np.float32).reshape(pos.shape[0], 3))
+
+    # Correct periodic issues
+    prot_sele = traj.topology.select(receptor_sele_str) # receptor should always be chainid 0
+    if sele_str is not None and correction:
+        if type(sele_str) == str:
+            sele_str = [sele_str]
+        lig_seles = []
+        lig_coms = []
+        for s in sele_str:
+            try:
+                lig_sele = traj.topology.select(s)
+            except:
+                raise Exception(f'failed to parse {s}')
+            lig_seles.append(lig_sele)
+            lig_coms.append(md.compute_center_of_mass(traj.atom_slice(lig_sele)))
+        prot_com = md.compute_center_of_mass(traj.atom_slice(prot_sele))
+        for frame in range(traj.n_frames):
+            for (s, lig_sele, lig_com) in zip(sele_str, lig_seles, lig_coms):
+                best_trans, _ = best_translation_by_unitcell(traj.unitcell_lengths[frame], lig_com[frame], prot_com[frame])
+                traj.xyz[frame, lig_sele, :] += best_trans
+
+
+    # Align frames for veiwing purposes
+    if correction:
+        traj = traj.superpose(traj, atom_indices=prot_sele, ref_atom_indices=prot_sele)
+
+    return traj
+
+
+def get_traj_PCA(traj, explained_variance_threshold: float=None):
+    """
+    """
+    # PCA
+    pca = PCA()
+    reduced_cartesian = pca.fit_transform(traj.xyz.reshape(traj.n_frames, traj.n_atoms * 3))
+    explained_variance = np.array([np.sum(pca.explained_variance_ratio_[:i+1]) for i in range(pca.n_components_)])
+
+    if explained_variance_threshold is not None:
+        n_components = int(np.where(explained_variance >= explained_variance_threshold)[0][0])
+
+    return pca, reduced_cartesian[:,:n_components], explained_variance[:n_components], n_components    
+
+
+def calculate_weighted_rc(reduced_cartesian, resampled_inds, upper_limit, pca_weights, mbar_weights):
+    assert reduced_cartesian.shape[0] == len(resampled_inds), f'{reduced_cartesian.shape}, {resampled_inds.shape}'
+    assert reduced_cartesian.shape[0] == len(mbar_weights)
+    assert reduced_cartesian.shape[1] == len(pca_weights)
+    
+    mean_weighted_rcs = []
+    for (rc, frame_no, mbar_weight) in zip(reduced_cartesian, resampled_inds[:,1], mbar_weights):
+        if frame_no <= upper_limit:
+            mean_weighted_rcs.append(np.mean(rc * pca_weights) * pca_weights)
+            
+    return np.mean(mean_weighted_rcs), np.std(mean_weighted_rcs) / np.sqrt(reduced_cartesian.shape[0])
+    
+
+@staticmethod
+def resample_with_MBAR(objs: List, u_kln: np.array, N_k: np.array, size: int, reshape_weights: tuple=None, specify_state: int=0, return_inds: bool=False, return_weights: bool=False, return_resampled_weights: bool=False, replace: bool=True):
+
+    # Get MBAR weights
+    weights = compute_MBAR_weights(u_kln, N_k)
+
+    # Reshape weights if specified
+    if reshape_weights is not None:
+        weights = weights.reshape(reshape_weights)
         
+    # Get probabilities
+    if len(weights.shape) == 1:
+        probs = weights.copy()
+    else:
+        probs = weights[:, specify_state]
+
+
+    # Resample
+    if size == -1:
+        resampled_inds = np.where(probs >= probs.max()*0.001)[0]
+        printf(f'Top 99.9% of probability includes {len(resampled_inds)} no. of frames')
+    else:
+        probs /= np.nan_to_num(probs).sum() # Renormalize to avoid errors
+        probs = np.nan_to_num(probs)
+        try:
+            resampled_inds = np.random.choice(range(len(probs)), size=size, replace=replace, p=probs)
+        except: 
+            resampled_inds = np.random.choice(range(len(probs)), size=len(np.where(probs > 0)[0]), replace=replace, p=probs)
+        
+    resampled_objs = []
+    for obj in objs:
+        resampled_objs.append(np.array([obj[resampled_ind] for resampled_ind in resampled_inds]))
+    # Return resampled objects
+    return_list = []
+    if len(objs) == 1:
+        return_list.append(resampled_objs[0])
+    elif len(objs) > 1:
+        for resampled_obj in resampled_objs:
+            return_list.append(resampled_obj)
+
+    # Optional returns
+    if return_inds:
+        return_list.append(resampled_inds)
+    if return_weights:
+        return_list.append(weights)
+    if return_resampled_weights:
+        resampled_weights = weights[resampled_inds, specify_state]
+        return_list.append(resampled_weights)
+
+    return return_list
+
+
+@staticmethod
+def compute_MBAR_weights(u_kln, N_k):
+    """
+    """
+    mbar = MBAR(u_kln, N_k, initialize='BAR')
+
+    return mbar.weights()
+    
+@staticmethod
+def detect_PC_equil(pc, reduced_cartesian):
+    t0, _, _ = detect_equilibration(reduced_cartesian[:,pc])
+    return t0
+    
+def detect_energy_equil(avg_energies):
+    t0, _, _ = detect_equilibration(avg_energies)
+    return t0
+    
+def get_truncation_atom_keep_inds(top):
+    remove_atom_inds = top.select('resname HOH NA CL POP')
+    return np.array([i for i in range(top.n_atoms) if i not in remove_atom_inds])
+    
+def best_translation_by_unitcell(cell_lengths, mobile_coords, target_coords):
+    perms = np.array([x for x in itertools.product([-1, 0, 1], repeat=3)])    
+    translations = cell_lengths * perms
+    permuted_positions = np.array([np.sum((translations[i], mobile_coords), axis=0) for i in range(translations.shape[0])])
+    rmsds_of_permutations = np.array([rmsd(permuted_positions[i], target_coords) for i in range(permuted_positions.shape[0])])
+    return translations[np.argmin(rmsds_of_permutations)], rmsds_of_permutations[np.argmin(rmsds_of_permutations)]
+    
+def best_translation_by_unitcell_jax(cell_lengths, mobile_coords, target_coords):
+    translations = cell_lengths * perms
+    permuted_positions = jax_add(translations, mobile_coords)
+    rmsds_of_permutations = rmsd_j(permuted_positions, target_coords)
+    return translations[jnp.argmin(rmsds_of_permutations)], rmsds_of_permutations[jnp.argmin(rmsds_of_permutations)]
+
+best_translation_by_unitcell_jax = jax.vmap(best_translation_by_unitcell_jax, in_axes=(0, 0, None))
+
+torsional_distance_on_period = lambda a, b, n: (1/n) * ( (180 - jnp.abs((jnp.mod(jnp.abs(n * (a - b)), 360)-180))))
+
+def get_angles_and_periods(traj):
+    #Determine some torsions
+    res_names = np.array([traj.top.atom(i).residue.name for i in range(traj.top.n_atoms)])
+    phi_inds, phi = md.compute_phi(traj)
+    psi_inds, psi = md.compute_psi(traj)
+    chi1_inds, chi1 = md.compute_chi1(traj)
+    chi2_inds, chi2 = md.compute_chi2(traj)
+
+    chi2_residues = res_names[chi2_inds][:, 0] #All chi2 atoms are the same residue
+    chi2_ns = jnp.array([2 if name in ["PHE", "TYR", "ASP", "LEU"] else 1 for name in chi2_residues])
+    angles = jnp.concatenate([phi, psi, chi1, chi2], axis=1)
+    periods = jnp.concatenate((jnp.ones(phi_inds.shape[0]),
+                               jnp.ones(psi_inds.shape[0]),
+                               jnp.ones(chi1_inds.shape[0]),
+                               chi2_ns), axis=-1)
+    
+    return angles, periods
+
+
+def getTorsionalDistanceMatrix(traj, selection_string=None):
+    if selection_string:
+        traj = traj.atom_slice(traj.top.select(selection_string))
+    angles, periods = get_angles_and_periods(traj)
+    distance_matrix = jnp.empty((angles.shape[0], angles.shape[0]))
+    row_op = lambda angle_i, angle_is: jax.vmap(torsional_distance_on_period, in_axes=(None, 0, None))(angle_i, angle_is, periods)
+    #iterate over the rows, each pair is parallel across the GPU
+    for i in range(angles.shape[0]):
+        distance_matrix = distance_matrix.at[i, :].set(jnp.sqrt(jnp.mean((row_op(angles[i], angles))**2, axis=-1)))
+    return distance_matrix
+
+
+def getAlphaCarbonDistanceMatrix(traj, selection_string=None):
+    import itertools
+    
+    if selection_string:
+        traj = traj.atom_slice(traj.top.select(selection_string))
+    CA_inds = traj.top.select('name CA')
+    #The 'features' are each distance between pairs of alpha_carbons
+    CA_pair_distances = md.compute_distances(traj, itertools.combinations(CA_inds, 2))
+    distance_matrix = jnp.empty((CA_pair_distances.shape[0], CA_pair_distances.shape[0]))
+    
+    ca_dist_func = lambda a, b: jnp.abs(b-a)
+    row_op = lambda dist_i, dist_is: jax.vmap(ca_dist_func, in_axes=(None, 0))(dist_i, dist_is)
+    #iterate over the rows, each pair is parallel across the GPU
+    for i in range(CA_pair_distances.shape[0]):
+        distance_matrix = distance_matrix.at[i, :].set(jnp.sqrt(jnp.mean((row_op(CA_pair_distances[i], CA_pair_distances))**2, axis=-1)))
+    return distance_matrix
+
+
+def getContactDistanceMatrix(top_fn, traj_fn, output_fn, conda_env='pyinteraph2', getcontacts_script=None, getcontacts_python=None):
+    """
+    Switch to a known conda environment and run getContacts.  Then switch back...
+    """
+    
+    conda_python = os.path.join(os.environ['CONDA_PREFIX'].replace('replica2',conda_env),'bin','python')
+    cmd = [conda_python, '/expanse/lustre/projects/uil133/josephdb/getcontacts/get_dynamic_contacts.py' if not getcontacts_script else getcontacts_script,
+           '--topology', top_fn,
+           '--trajectory', traj_fn,
+           '--output', output_fn,
+           '--cores', '10',
+           '--sele', 'protein or resname UNK',
+           '--ligand', 'resname UNK',
+           '--lipid', 'resname POP',
+           '--itypes', 'all',
+           '--stride', '1']   
+    
+    #Run these on da line
+    printf(f"Running Process: {'\n\t'.join(cmd)}")
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        print("STDOUT:\n", result.stdout)
+        print("STDERR:\n", result.stderr)
+    except subprocess.CalledProcessError as e:
+        print(f"Error executing commands. Return code: {e.returncode}")
+        print("STDOUT:\n", e.stdout)
+        print("STDERR:\n", e.stderr)
+        sys.exit(e.returncode)
+        raise Exception("Shouldn't handle gracefully...")
+
+    X, features = ContactNetworkBuilder.from_tsv(tsv_fn=output_fn,
+                                                 pdb_fn=top_fn,
+                                                 token_mode='residue_atomclass').get_contact_vectors()
+    X = X.astype(jnp.int8)
+    contact_dist_func = lambda a, b: jnp.mean(jnp.abs(b-a)) #All zero where equal, all one where not, return percentage
+    row_op = lambda cont_i, cont_is: jax.vmap(contact_dist_func, in_axes=(None, 0))(cont_i, cont_is)
+    matrix = jax.vmap(row_op, in_axes=(0,None))(X, X)
+
+    return matrix, features
+ 
+ 
+
+def frobenius_norm(matrix_a: np.ndarray, matrix_b: np.ndarray, normalise: bool = True) -> float:
+    """
+    Compute the Frobenius norm of the difference between two distance matrices.
+ 
+    The Frobenius norm measures element-wise structural divergence between two
+    matrices of the same shape. Normalising by the number of upper-triangle
+    elements makes the result comparable across matrices of different sizes,
+    which is important when comparing torsional, alpha-carbon, and contact
+    matrices that may have different dimensions.
+ 
+    Mathematically:
+        F = sqrt( sum( (A_ij - B_ij)^2 ) )
+    Normalised:
+        F_norm = F / n_pairs   where n_pairs = n*(n-1)/2
+ 
+    Parameters
+    ----------
+    matrix_a : np.ndarray of shape (n, n)
+        First symmetric distance matrix.
+    matrix_b : np.ndarray of shape (n, n)
+        Second symmetric distance matrix. Must have the same shape as
+        ``matrix_a``.
+    normalise : bool
+        If True, divide the raw Frobenius norm by the number of upper-triangle
+        elements so that the result is size-independent. Default True.
+ 
+    Returns
+    -------
+    norm : float
+        (Normalised) Frobenius norm of ``matrix_a - matrix_b``. Values near 0
+        indicate the matrices are nearly identical; larger values indicate
+        greater structural divergence.
+ 
+    Raises
+    ------
+    ValueError
+        If ``matrix_a`` and ``matrix_b`` do not have the same shape.
+ 
+    Examples
+    --------
+    >>> A = np.array([[0, 1, 2], [1, 0, 3], [2, 3, 0]], dtype=float)
+    >>> B = np.array([[0, 1, 2], [1, 0, 3], [2, 3, 0]], dtype=float)
+    >>> frobenius_norm(A, B)
+    0.0
+    >>> frobenius_norm(A, B + 0.1)
+    0.1
+    """
+    if matrix_a.shape != matrix_b.shape:
+        raise ValueError(f'Matrices must have the same shape, got {matrix_a.shape} and {matrix_b.shape}.')
+    raw_norm = np.sqrt(np.sum((matrix_a - matrix_b) ** 2))
+    if normalise:
+        n = matrix_a.shape[0]
+        n_pairs = n * (n - 1) / 2
+        return float(raw_norm / n_pairs)
+    return float(raw_norm)
+
+
+def jsd_distance_matrices(matrix_a: np.ndarray,
+                           matrix_b: np.ndarray,
+                           n_bins: int = 100) -> float:
+    """
+    Compute the Jensen-Shannon Divergence between the pairwise distance
+    distributions of two distance matrices.
+
+    The upper triangle (i > j, no diagonal) of each matrix is extracted,
+    histogrammed over a shared bin range, and compared with JSD. Because JSD
+    is symmetric and bounded in [0, 1] (base-2 logarithm), it is well-suited
+    for comparing empirical distributions from finite samples.
+
+    Parameters
+    ----------
+    matrix_a : np.ndarray of shape (n, n)
+        First pairwise distance matrix.
+    matrix_b : np.ndarray of shape (n, n)
+        Second pairwise distance matrix. Must have the same shape as
+        ``matrix_a``.
+    n_bins : int
+        Number of histogram bins used to discretise the distributions.
+        Default 100.
+
+    Returns
+    -------
+    jsd : float
+        Jensen-Shannon Divergence in [0, 1]. Values near 0 indicate highly
+        similar distributions; values near 1 indicate maximally dissimilar
+        distributions.
+
+    Examples
+    --------
+    >>> A = np.random.rand(50, 50)
+    >>> jsd_distance_matrices(A, A)   # identical matrices
+    0.0
+    >>> jsd_distance_matrices(A, np.random.rand(50, 50))  # different
+    0.073...
+    """
+    # Extract upper triangle (i > j, no diagonal) — shape (n*(n-1)/2,)
+    triu_inds = np.triu_indices_from(matrix_a, k=1)
+    pairs_a = matrix_a[triu_inds]
+    pairs_b = matrix_b[triu_inds]
+
+    # Shared bin edges so both distributions are on the same support
+    combined_min = min(pairs_a.min(), pairs_b.min())
+    combined_max = max(pairs_a.max(), pairs_b.max())
+    bins = np.linspace(combined_min, combined_max, n_bins + 1)
+
+    hist_a, _ = np.histogram(pairs_a, bins=bins, density=True)
+    hist_b, _ = np.histogram(pairs_b, bins=bins, density=True)
+
+    # Small epsilon prevents zero-probability issues without meaningfully
+    # distorting the distributions
+    eps = 1e-10
+    hist_a = hist_a + eps
+    hist_b = hist_b + eps
+
+    return float(jensenshannon(hist_a, hist_b, base=2))
+
