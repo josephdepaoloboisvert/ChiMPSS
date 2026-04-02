@@ -1,0 +1,523 @@
+================================================================================
+  ChiMPSS REORGANIZATION PLAN
+  Chicago Membrane Protein Simulation Suite
+  Generated 2026-03-31
+================================================================================
+
+TABLE OF CONTENTS
+  1. Current State Assessment
+  2. Target Directory Structure
+  3. Phase 1 — Shared Utilities Consolidation
+  4. Phase 2 — Package Structure (__init__.py + import cleanup)
+  5. Phase 3 — Naming Convention Standardization
+  6. Phase 4 — Module-Level Side Effects Removal
+  7. Phase 5 — Documentation Standardization
+  8. Phase 6 — File Relocation & Cleanup
+  9. Phase 7 — Entry Point Scripts
+  10. Migration Notes & Risk Assessment
+
+
+================================================================================
+1.  CURRENT STATE ASSESSMENT
+================================================================================
+
+Problems ranked by severity:
+
+HIGH
+  - No __init__.py files anywhere. Package imports rely on fragile
+    sys.path.append() hacks and try/except fallback patterns.
+  - Six independent copies of printf() defined as lambdas.
+  - get_positions_from_pdb(), restrain_atoms(), unpack_infiles() are
+    duplicated verbatim between MotorRow_utils.py and Minimizer_utils.py.
+  - write_FASTA() is duplicated in utils/utils.py and utility/FileManipulations.py.
+  - Two directories serve overlapping purposes: utils/ and utility/.
+  - Module-level executable code in FultonMarketAnalysis.py (JAX init),
+    utils/utils.py (rdkit config), Ligand/Ligand.py (rdkit config),
+    calc_distance_matrix.py, grid_potentials.py, recovery.py,
+    test_retro_conv.py.
+
+MEDIUM
+  - Mixed naming conventions: camelCase functions (returnRdkitMol,
+    getTorsionalDistanceMatrix, getAlphaCarbonDistanceMatrix),
+    PascalCase filenames for utility modules (FileManipulations.py,
+    DistanceMatrixUtils.py), snake_case elsewhere.
+  - MotorRow.py and MotorRow_utils.py sit at the repo root instead
+    of in their own package directory.
+  - 29 Jupyter notebooks scattered across root and subdirectories,
+    many are experiments, not maintained examples.
+  - GetContactsHelper.py at root duplicates/predates
+    FultonMarket/ContactNetwork.py.
+  - Two copies of ContactNetworkBuilder class (GetContactsHelper.py
+    at root and ContactNetwork.py in FultonMarket/).
+  - @staticmethod decorators on module-level functions in FultonMarketUtils.py.
+  - rmsd lambda defined then overridden by a def in FultonMarketUtils.py.
+  - build_thermodynamic_states() in FultonMarketUtils.py takes self but
+    is a module-level function — dead code.
+
+LOW
+  - Inconsistent docstring depth (Bridgeport thorough, Minimizer absent).
+  - .ipynb_checkpoints committed in multiple directories.
+  - Test_Things_Work.py marked WIP throughout — stale.
+  - interactive_utils.py read_json has a hardcoded filename bug.
+
+
+================================================================================
+2.  TARGET DIRECTORY STRUCTURE
+================================================================================
+
+ChiMPSS/
+  __init__.py
+
+  chimpss/                          <-- main package
+    __init__.py
+    common/                         <-- shared utilities (Phase 1)
+      __init__.py
+      logging.py                    printf, timestamp
+      io.py                         write_FASTA, read/write_json, cif2pdb,
+                                    remove_dummy_atoms, isolate_chains
+      filesystem.py                 ensure_exists
+      openmm_utils.py               get_positions_from_pdb, restrain_atoms,
+                                    unpack_infiles, parse_atom_inds,
+                                    minimize_from_sys, describe_system,
+                                    describe_state, change_resname,
+                                    convert_to_TrackedQuantity,
+                                    build_sampler_states
+      geometry.py                   rmsd (one copy), best_translation_by_unitcell
+                                    (numpy + JAX), PBC correction
+
+    bridgeport/                     <-- system construction
+      __init__.py
+      bridgeport.py                 class Bridgeport
+      protein_preparer.py           class ProteinPreparer
+      repair_protein.py             class RepairProtein
+      force_fields.py               class ForceFieldHandler
+      joiner.py                     class Joiner
+      ligand.py                     class Ligand
+      analogue.py                   class Analogue
+      mutated_peptide.py            class MutatedPeptide
+      ligand_utils.py
+      docking.py                    class Docking
+      prepare_docking.py
+
+    motor_row/                      <-- equilibration
+      __init__.py
+      motor_row.py                  class MotorRow
+
+    fulton_market/                   <-- production REMD
+      __init__.py
+      fulton_market.py              class FultonMarket
+      randolph.py                   class Randolph
+      analysis.py                   class FultonMarketAnalysis
+      contact_network.py            class ContactNetworkBuilder
+      convergence.py                distance matrix convergence utils
+                                    (merge retro_convergence_utils.py +
+                                     frobenius_norm, jsd_distance_matrices,
+                                     getTorsionalDistanceMatrix, etc.)
+      distance_matrix.py            class DistanceMatrix + utils
+
+    minimizer/                      <-- standalone minimization (optional)
+      __init__.py
+      minimizer.py                  class Minimizer
+
+  scripts/                          <-- CLI entry points
+    run_bridgeport.py
+    run_motor_row.py
+    run_fulton_market.py
+    run_fulton_market_mpi.py
+    run_docking.py
+    adjust_system.py
+    recovery.py
+
+  notebooks/                        <-- curated examples only
+    00_showcase.ipynb
+    01_build_system.ipynb
+    02_minimize.ipynb
+    03_equilibrate.ipynb
+    04_replica_exchange.ipynb
+    05_analysis.ipynb
+    examples/
+      small_molecule.ipynb
+      peptide.ipynb
+      mutated_peptide.ipynb
+      analogue.ipynb
+      docking.ipynb
+
+  test_data/                        <-- reference data (unchanged)
+    alphafold3/
+    raw_RCSB/
+
+  environment.yml
+
+
+================================================================================
+3.  PHASE 1 — SHARED UTILITIES CONSOLIDATION
+================================================================================
+
+Goal: Eliminate all duplicated utility functions and establish a single
+source of truth in chimpss/common/.
+
+3.1  chimpss/common/logging.py
+  Move the printf lambda here. Every other module imports from here.
+  Current locations (all to be deleted):
+    - FultonMarketUtils.py           line 28
+    - GetContactsHelper.py           line ~15
+    - ContactNetwork.py              module-level
+    - Reporting.py                   module-level
+    - retro_convergence_utils.py     module-level
+    - DistanceMatrixUtils.py         module-level
+  Also move timestamp from Reporting.py.
+
+3.2  chimpss/common/io.py
+  Consolidate:
+    - write_FASTA()           from utils/utils.py AND utility/FileManipulations.py
+    - read_json()             from interactive/interactive_utils.py (fix bug)
+    - write_json()            from interactive/interactive_utils.py
+    - cif2pdb()               from utility/FileManipulations.py
+    - remove_dummy_atoms()    from utility/FileManipulations.py
+    - isolate_chains()        from utility/FileManipulations.py
+    - slice_select lambda     from utility/FileManipulations.py
+
+3.3  chimpss/common/filesystem.py
+    - ensure_exists()         from utility/General.py
+
+3.4  chimpss/common/openmm_utils.py
+  Merge the duplicated MotorRow_utils / Minimizer_utils into one:
+    - get_positions_from_pdb()   (MotorRow version is superset — takes
+                                  lig_chain in addition to lig_resname)
+    - restrain_atoms()           (identical except parameter name:
+                                  MotorRow uses rst_strength, Minimizer
+                                  uses fc_pos — unify to fc_pos)
+    - unpack_infiles()           (identical)
+    - parse_atom_inds()          (identical)
+    - minimize_from_sys()        (identical)
+    - describe_system()          from utils/utils.py
+    - describe_state()           from utils/utils.py
+    - change_resname()           from utils/utils.py
+    - convert_to_TrackedQuantity() from FultonMarketUtils.py
+    - build_sampler_states()     from FultonMarketUtils.py
+
+3.5  chimpss/common/geometry.py
+    - rmsd()                     one definitive version
+    - best_translation_by_unitcell()    numpy version
+    - best_translation_by_unitcell_jax()  JAX version + vmapped wrapper
+
+Delete after consolidation:
+    - utils/utils.py             (all functions moved)
+    - utils/ProteinPreparer.py   (moved to bridgeport/)
+    - utility/General.py         (moved to common/filesystem.py)
+    - utility/Reporting.py       (moved to common/logging.py)
+    - utility/FileManipulations.py  (moved to common/io.py)
+    - MotorRow_utils.py          (merged into common/openmm_utils.py)
+    - Minimizer/Minimizer_utils.py  (merged into common/openmm_utils.py)
+    - interactive/interactive_utils.py (moved to common/io.py)
+    - GetContactsHelper.py       (superseded by ContactNetwork.py)
+
+
+================================================================================
+4.  PHASE 2 — PACKAGE STRUCTURE
+================================================================================
+
+Goal: Make ChiMPSS a proper Python package with __init__.py files and
+clean imports. Remove all sys.path.append() hacks.
+
+4.1  Create __init__.py for every package directory.
+  Each __init__.py should export the primary public class(es):
+
+    chimpss/__init__.py:
+      from .bridgeport import Bridgeport
+      from .motor_row import MotorRow
+      from .fulton_market import FultonMarket, FultonMarketAnalysis
+
+    chimpss/bridgeport/__init__.py:
+      from .bridgeport import Bridgeport
+
+    chimpss/motor_row/__init__.py:
+      from .motor_row import MotorRow
+
+    chimpss/fulton_market/__init__.py:
+      from .fulton_market import FultonMarket
+      from .analysis import FultonMarketAnalysis
+
+    chimpss/common/__init__.py:
+      from .logging import printf
+
+4.2  Replace every sys.path.append() with relative imports.
+  Current offenders:
+    - MotorRow.py:               sys.path.append(os.path.dirname(...))
+    - Minimizer/Minimizer.py:    sys.path.append(split('/')[:-1])
+    - utils/ProteinPreparer.py:  sys.path.append(split('/')[:-1])
+    - Bridgeport/Bridgeport.py:  sys.path.append(split('/')[:-2])
+    - Ligand/Ligand.py:          sys.path.append(split('/')[:-2]) AND [:-1]
+
+4.3  Replace try/except import fallbacks with clean relative imports.
+  Current offenders:
+    - DistanceMatrix/DistanceMatrix.py:
+        try: from .DistanceMatrixUtils import ...
+        except: from DistanceMatrixUtils import ...
+
+4.4  Replace `from X import *` with explicit imports.
+  Current offenders:
+    - MotorRow.py:               from MotorRow_utils import *
+    - Minimizer.py:              from Minimizer_utils import *
+    - FultonMarketwithAnalyzer:  from .FultonMarketUtils import *
+    - Bridgeport.py:             from utils.utils import *
+    - FileManipulations.py:      from .General import *
+
+
+================================================================================
+5.  PHASE 3 — NAMING CONVENTION STANDARDIZATION
+================================================================================
+
+Rule: snake_case for all files, functions, and variables.
+      PascalCase for classes only.
+
+5.1  File renames:
+  Current Name                        New Name
+  ─────────────────────────────────── ──────────────────────
+  FultonMarketwithAnalyzer.py         fulton_market.py
+  RandolphwithAnalyzer.py             randolph.py
+  FultonMarketUtils.py                (dissolved into common/ and convergence.py)
+  FultonMarketAnalysis.py             analysis.py
+  ContactNetwork.py                   contact_network.py
+  DistanceMatrix.py                   distance_matrix.py
+  DistanceMatrixUtils.py              (merged into distance_matrix.py)
+  ForceFieldHandler.py                force_fields.py
+  OpenMMJoiner.py                     joiner.py
+  write_xml_pretty.py                 (stays, already snake_case)
+  FileManipulations.py                (dissolved into common/io.py)
+  Reporting.py                        (dissolved into common/logging.py)
+  General.py                          (dissolved into common/filesystem.py)
+  ProteinPreparer.py                  protein_preparer.py
+  RepairProtein.py                    repair_protein.py
+  GetContactsHelper.py                (deleted — ContactNetwork.py is canonical)
+  MutatedPeptide.py                   mutated_peptide.py
+  Minimizer_utils.py                  (dissolved into common/openmm_utils.py)
+  MotorRow_utils.py                   (dissolved into common/openmm_utils.py)
+  retro_convergence_utils.py          convergence.py (merged)
+  Test_Things_Work.py                 (deleted — stale WIP)
+
+5.2  Function renames (camelCase -> snake_case):
+  Current Name                        New Name
+  ─────────────────────────────────── ──────────────────────
+  getTorsionalDistanceMatrix          get_torsional_distance_matrix
+  getAlphaCarbonDistanceMatrix        get_alpha_carbon_distance_matrix
+  getContactDistanceMatrix            get_contact_distance_matrix
+  get_traj_PCA                        get_traj_pca
+  detect_PC_equil                     detect_pc_equil
+  PCA_convergence_detection           pca_convergence_detection
+  plot_MRC                            plot_mrc
+  write_traj_from_pos_boxvecs         write_traj_from_pos_box_vecs
+  build_thermodynamic_states          (delete — dead code)
+  resample_with_MBAR                  resample_with_mbar
+  compute_MBAR_weights                compute_mbar_weights
+  returnRdkitMol                      return_rdkit_mol
+  geometric_distribution              geometric_distribution (fine)
+
+5.3  Class renames:
+  No changes needed — all classes already use PascalCase.
+
+5.4  Parameter name unification:
+  restrain_atoms() parameter: rst_strength (MotorRow) / fc_pos (Minimizer)
+    -> standardize to restraint_strength
+
+
+================================================================================
+6.  PHASE 4 — MODULE-LEVEL SIDE EFFECTS REMOVAL
+================================================================================
+
+Goal: Importing a module should never trigger computation, GPU init,
+filesystem writes, or global state mutation.
+
+6.1  FultonMarketAnalysis.py — remove from module level:
+    jax.print_environment_info()
+    printf(f"Default JAX backend is {jax.default_backend()}")
+  Move to FultonMarketAnalysis.__init__() or a dedicated setup function.
+
+6.2  utils/utils.py and Ligand/Ligand.py — remove from module level:
+    rdDepictor.SetPreferCoordGen(True)
+    IPythonConsole.drawOptions.minFontSize=20
+  These are display preferences; move to a notebook-side setup function or
+  a lazy initializer that only runs when visualization is requested.
+
+6.3  FultonMarketUtils.py — remove stale module-level objects:
+    - @staticmethod decorators on module-level functions (remove decorators)
+    - Dead lambda: rmsd = lambda ... (remove, keep only def rmsd)
+    - Dead function: build_thermodynamic_states(self) (remove entirely)
+    - perms = jnp.array([...]) at module level triggers JAX array creation
+      on import. Move into the function that uses it, or lazy-init.
+
+6.4  Root-level scripts that execute on import:
+    - calc_distance_matrix.py   -> wrap in if __name__ == '__main__':
+    - grid_potentials.py        -> wrap in if __name__ == '__main__':
+    - test_retro_conv.py        -> wrap in if __name__ == '__main__':
+    - recovery.py               -> wrap in if __name__ == '__main__':
+      (recovery.py already has the right structure conceptually but runs
+       everything at module level)
+
+
+================================================================================
+7.  PHASE 5 — DOCUMENTATION STANDARDIZATION
+================================================================================
+
+Rule: NumPy-style docstrings for all public classes and functions.
+Minimum required sections: one-line summary, Parameters, Returns.
+
+7.1  Template:
+    def function_name(param_a: type, param_b: type = default) -> return_type:
+        """
+        One-line summary in imperative mood.
+
+        Extended description if needed (optional).
+
+        Parameters
+        ----------
+        param_a : type
+            Description.
+        param_b : type
+            Description. Default ``default``.
+
+        Returns
+        -------
+        name : type
+            Description.
+        """
+
+7.2  Priority classes needing documentation:
+  HIGH   — MotorRow (no class docstring, no method docstrings)
+  HIGH   — Minimizer (no class docstring, _minimize docstring empty)
+  MEDIUM — ForceFieldHandler (class docstring exists, methods underdocumented)
+  MEDIUM — Joiner (class docstring exists, methods sparse)
+  LOW    — DistanceMatrix (has some docstrings)
+
+7.3  Modules that already have good documentation (preserve as-is):
+  - FultonMarketwithAnalyzer.py (thorough)
+  - RandolphwithAnalyzer.py (thorough)
+  - FultonMarketAnalysis.py (thorough)
+  - Bridgeport.py (thorough)
+  - ProteinPreparer.py (adequate)
+  - RepairProtein.py (adequate)
+
+
+================================================================================
+8.  PHASE 6 — FILE RELOCATION & CLEANUP
+================================================================================
+
+8.1  Move root-level module files into their packages:
+  MotorRow.py          -> chimpss/motor_row/motor_row.py
+  MotorRow_utils.py    -> dissolved into chimpss/common/openmm_utils.py
+
+8.2  Move CLI entry points to scripts/:
+  RUN_FULTONMARKET.py      -> scripts/run_fulton_market.py
+  RUN_FULTONMARKET_MPI.py  -> scripts/run_fulton_market_mpi.py
+  RUN_MOTORROW.py          -> scripts/run_motor_row.py
+  RUN_BRIDGEPORT.py        -> scripts/run_bridgeport.py  (from Bridgeport/)
+  RUN_DOCKING.py           -> scripts/run_docking.py     (from Docking/)
+  RUN_RepairProtein.py     -> scripts/run_repair_protein.py (from RepairProtein/)
+  ADJUST_SYSTEM.py         -> scripts/adjust_system.py
+  recovery.py              -> scripts/recovery.py
+
+8.3  Curate notebooks:
+  Keep in notebooks/ (rename for clarity):
+    ChiMPSS-Showcase.ipynb       -> 00_showcase.ipynb
+    Build(BP).ipynb               -> 01_build_system.ipynb
+    Minimize.ipynb                -> 02_minimize.ipynb
+    Run_MR_FM.ipynb               -> 03_equilibrate_and_run.ipynb
+    Analyze_MPI_3.5.ipynb         -> 04_analysis.ipynb
+    interactive/*.ipynb           -> notebooks/examples/ (keep names)
+
+  Move to notebooks/archive/ or delete:
+    Build(BP)KOR.ipynb           (system-specific)
+    Fieg2005.ipynb               (legacy benchmark)
+    Talha_Contacts.ipynb         (person-specific)
+    MPI_compare.ipynb            (one-off comparison)
+    HMR_MPI.ipynb                (experiment log, not tutorial)
+    Water_Hole.ipynb             (one-off analysis)
+    Interaction_Energy.ipynb     (one-off analysis)
+    implicit_membrane.ipynb      (benchmarking)
+    Static_Env.ipynb             (benchmarking)
+    NewDistanceMatrix.ipynb      (development scratch)
+    Retro_Analysis.ipynb         (development scratch)
+    Adjust_System.ipynb          (now covered by scripts/adjust_system.py)
+    DistanceMatrix/Untitled.ipynb  (unnamed scratch)
+    Docking/*.ipynb              (move to notebooks/examples/docking/)
+    Ligand/test.ipynb            (test scratch)
+
+8.4  Delete:
+  - All .ipynb_checkpoints/ directories (add to .gitignore)
+  - GetContactsHelper.py (superseded by FultonMarket/ContactNetwork.py)
+  - Test_Things_Work.py (stale WIP)
+  - calc_distance_matrix.py (module-level script, not reusable)
+  - grid_potentials.py (module-level script, not reusable; preserve as
+    a notebook if the logic is still needed)
+  - test_retro_conv.py (one-off test, not a proper test suite)
+
+8.5  Add to .gitignore:
+  .ipynb_checkpoints/
+  __pycache__/
+  *.pyc
+
+
+================================================================================
+9.  PHASE 7 — ENTRY POINT SCRIPTS
+================================================================================
+
+All CLI scripts in scripts/ should follow a consistent pattern:
+
+  - argparse for all parameters
+  - from chimpss.X import Y (clean package import)
+  - if __name__ == '__main__': guard
+  - No module-level computation
+
+The RUN_FULTONMARKET.py pattern (already updated) is the template.
+Apply to all other entry points.
+
+Consider adding a setup.py or pyproject.toml with console_scripts
+entry points so users can install and run:
+    chimpss-bridgeport input.json
+    chimpss-motor-row system.pdb system.xml output/
+    chimpss-fulton-market system.pdb system.xml output/
+
+
+================================================================================
+10.  MIGRATION NOTES & RISK ASSESSMENT
+================================================================================
+
+EXECUTION ORDER
+  Phase 1 first (utilities) — everything else depends on it.
+  Phase 2 second (__init__.py) — enables clean imports for all later phases.
+  Phases 3-5 can proceed in parallel after 1 and 2.
+  Phase 6 (relocation) should be last, after all internal references are
+  updated, to avoid breaking imports mid-refactor.
+
+RISKS
+  - Bridgeport.py is very large. Splitting it is desirable but risky.
+    Recommendation: do NOT split Bridgeport.py in this pass. Move it
+    intact and fix its imports. Splitting is a future refactor.
+  - Notebook migration will break anyone who has paths pointing to the
+    old locations. Add a README note.
+  - MotorRow and Minimizer share a lot of code. After consolidating
+    their utils, consider whether Minimizer should simply be a method
+    on MotorRow rather than its own class (it's just _minimize()).
+  - The ForceFields/ XML data files (amber14/, lipid17/, tip3p.xml etc.)
+    need to travel with the package. Ensure they're included in the
+    package data configuration.
+
+BACKWARD COMPATIBILITY
+  - Keep a top-level shim for at least one release cycle:
+      # ChiMPSS/FultonMarket/FultonMarketwithAnalyzer.py
+      from chimpss.fulton_market.fulton_market import FultonMarket
+    This lets existing notebooks and scripts continue to work while
+    migrating to the new import paths.
+  - RUN_FULTONMARKET_MPI.py calls RUN_FULTONMARKET.py by path via
+    runpy. After relocation, update the path reference or convert
+    to a package-level import.
+
+TESTING
+  - No test suite exists currently. Before major refactoring, create
+    a minimal smoke test that imports each public class and verifies
+    construction does not raise. This protects against import breakage.
+  - After each phase, run the smoke test before proceeding.
+
+================================================================================
+END OF PLAN
+================================================================================
