@@ -1,12 +1,25 @@
-import os, sys, json, shutil
-from datetime import datetime
-import mdtraj as md
-import MDAnalysis as mda
-from MDAnalysis.analysis.align import alignto
+import json
+import os
 import pathlib
-sys.path.append('/'.join(os.path.abspath(__file__).split('/')[:-2]))
+import shutil
+import sys
+
+from copy import deepcopy
+from datetime import datetime
+
+import MDAnalysis as mda
+import mdtraj as md
 import numpy as np
-from utils.utils import *
+from MDAnalysis.analysis.align import alignto
+from openbabel import openbabel
+from openmm.app import PDBFile, Modeller
+from openmm import XmlSerializer
+from openmm.unit import *
+from pdbfixer import PDBFixer
+from rdkit import Chem
+from rdkit.Chem import AllChem
+
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from utils.ProteinPreparer import ProteinPreparer
 from RepairProtein.RepairProtein import RepairProtein
 from ForceFields.ForceFieldHandler import ForceFieldHandler
@@ -15,14 +28,6 @@ from Ligand.Ligand import Ligand
 from Ligand.Analogue import Analogue
 from Ligand.MutatedPeptide import MutatedPeptide
 from Minimizer.Minimizer import Minimizer
-from openmm.app import *
-from openmm import *
-from openmm.unit import *
-from openbabel import openbabel
-from pdbfixer import PDBFixer
-from rdkit import Chem
-from rdkit.Chem import AllChem
-from copy import deepcopy
 
 class Bridgeport():
     """

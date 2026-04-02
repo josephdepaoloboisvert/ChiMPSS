@@ -1,6 +1,9 @@
-import os, sys, glob
+import os
+import glob
+
 import mdtraj as md
-from .General import *
+
+from .General import ensure_exists
 
 
 slice_select = lambda traj, selection: traj.atom_slice(traj.top.select(selection))

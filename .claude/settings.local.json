@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(__NEW_LINE_c6d9d71d8de3ff4a__ echo:*)",
+      "Bash(__NEW_LINE_98db1a1743030424__ echo:*)",
+      "Bash(__NEW_LINE_c3b5ea401f3efa7e__ echo:*)",
+      "Bash(__NEW_LINE_44a0cfdc344dbb43__ echo:*)",
+      "Bash(ls -d c:/Users/josep/CODE/githubs/ChiMPSS/ChiMPSS/*/)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\josep\\CODE\\githubs\\ChiMPSS\\ChiMPSS\\chimpss",
+      "\\tmp"
+    ]
+  }
+}

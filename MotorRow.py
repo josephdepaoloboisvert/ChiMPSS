@@ -1,15 +1,19 @@
 #MotorRow
-import os, shutil, sys
-sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+import math
+import os
+import shutil
+
 import mdtraj as md
 import numpy as np
-from openmm.app import *
-from openmm import *
-from openmm.unit import *
 from datetime import datetime
-from MotorRow_utils import *
+from openmm.app import PDBFile, Simulation, StateDataReporter, DCDReporter
+from openmm import (XmlSerializer, LangevinMiddleIntegrator,
+                    MonteCarloMembraneBarostat, MonteCarloBarostat)
+from openmm.unit import (kelvin, picosecond, femtosecond, bar, nanometer,
+                         joule, angstrom, mole)
 from typing import List
-import math
+
+from MotorRow_utils import get_positions_from_pdb, restrain_atoms, unpack_infiles
 
 class MotorRow():
     """

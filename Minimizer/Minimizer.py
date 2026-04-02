@@ -1,15 +1,18 @@
-#MotorRow
-import os, shutil, sys
+#Minimizer
+import math
+import os
+import shutil
+
 import mdtraj as md
 import numpy as np
-from openmm.app import *
-from openmm import *
-from openmm.unit import *
 from datetime import datetime
-sys.path.append('/'.join(os.path.abspath(__file__).split('/')[:-1]))
-from Minimizer_utils import *
+from openmm.app import PDBFile, Simulation
+from openmm import XmlSerializer, LangevinIntegrator
+from openmm.unit import kelvin, picosecond, femtosecond
 from typing import List
-import math
+
+from .Minimizer_utils import (unpack_infiles, get_positions_from_pdb,
+                              restrain_atoms, parse_atom_inds)
 
 class Minimizer():
     """

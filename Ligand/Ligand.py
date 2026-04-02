@@ -1,30 +1,31 @@
-import textwrap, sys, os, glob, shutil
-import numpy as np
-from copy import deepcopy
-import MDAnalysis as mda
-from MDAnalysis.analysis.align import alignto
-from MDAnalysis.analysis.rms import rmsd
-from MDAnalysis.analysis.bat import BAT
-from MDAnalysis.lib.distances import calc_dihedrals
-from MDAnalysis.coordinates.PDB import PDBWriter
-import mdtraj as md
-from pdbfixer import PDBFixer
-from openbabel import openbabel
-from datetime import datetime
+import glob
+import os
+import shutil
+import textwrap
 
-# rdkit
-from rdkit import Chem
-from rdkit.Chem import Draw, AllChem
-from rdkit.Chem.Draw import IPythonConsole
-from rdkit.Chem import rdFMCS
-from rdkit.Chem.Draw import rdDepictor
-rdDepictor.SetPreferCoordGen(True)
-IPythonConsole.drawOptions.minFontSize=20
-from IPython.display import display
+from copy import deepcopy
+from datetime import datetime
 from typing import List
-sys.path.append('/'.join(os.path.abspath(__file__).split('/')[:-2]))
-sys.path.append('/'.join(os.path.abspath(__file__).split('/')[:-1]))
-from ligand_utils import *
+
+import MDAnalysis as mda
+import mdtraj as md
+import numpy as np
+from IPython.display import display
+from MDAnalysis.analysis.align import alignto
+from MDAnalysis.analysis.bat import BAT
+from MDAnalysis.analysis.rms import rmsd
+from MDAnalysis.coordinates.PDB import PDBWriter
+from MDAnalysis.lib.distances import calc_dihedrals
+from openbabel import openbabel
+from pdbfixer import PDBFixer
+from rdkit import Chem
+from rdkit.Chem import Draw, AllChem, rdFMCS
+from rdkit.Chem.Draw import IPythonConsole, rdDepictor
+
+rdDepictor.SetPreferCoordGen(True)
+IPythonConsole.drawOptions.minFontSize = 20
+
+from .ligand_utils import compute_C_positions
 
 
 class Ligand():

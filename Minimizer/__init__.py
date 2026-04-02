@@ -1,0 +1,1 @@
+"""Minimizer — standalone energy minimization."""

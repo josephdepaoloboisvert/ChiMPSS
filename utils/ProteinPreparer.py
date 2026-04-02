@@ -1,16 +1,14 @@
-import textwrap, sys, os
-import numpy as np
-from pdbfixer import PDBFixer
-from openbabel import openbabel
-#OpenMM
-from openmm.app import *
-from openmm import *
-from openmm import unit
-from datetime import datetime
-sys.path.append('/'.join(os.path.abspath(__file__).split('/')[:-1]))
-from openmm.app.pdbfile import PDBFile
+import os
+import textwrap
+
 import MDAnalysis as mda
 import mdtraj as md
+import numpy as np
+from datetime import datetime
+from openbabel import openbabel
+from openmm import Topology, unit
+from openmm.app import PDBFile
+from pdbfixer import PDBFixer
 
 
 

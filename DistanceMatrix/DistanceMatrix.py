@@ -4,10 +4,7 @@ import mdtraj as md
 import numpy as np
 from typing import List
 #Custom Code Imports
-try:
-    from .DistanceMatrixUtils import _compute_component_matrices, _compute_matrix, printf
-except:
-    from DistanceMatrixUtils import _compute_component_matrices, _compute_matrix, printf
+from .DistanceMatrixUtils import _compute_component_matrices, _compute_matrix, printf
 
 
 class DistanceMatrix():
