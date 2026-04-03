@@ -1126,7 +1126,7 @@ class FultonMarketAnalysis():
         getcontacts_script: str = None,
         conda_env: str = None,
         getcontacts_python: str = None,
-    ) -> Dict[int, Dict[str, bool]]:
+    ) -> Tuple[Dict[int, Dict[str, bool]], Dict[int, dict]]:
         """
         Evaluate convergence checks as a function of simulation progress,
         expressed entirely in percentages of the total number of completed
@@ -1179,6 +1179,23 @@ class FultonMarketAnalysis():
         report : dict of int -> dict of str -> bool
             Per-sim_no check results. All display values are percentages.
             Final key ``'STOP'`` is True when all checks pass.
+        metrics : dict of int -> dict
+            Per-sim_no convergence metadata for downstream analysis/graphing.
+            Each entry contains:
+              - ``equil_fraction`` : float — fraction of frames discarded as
+                equilibration at this checkpoint.
+              - ``first_valid_sim_no`` : int — first sim_no included in the
+                post-equilibration comparison window.
+              - ``effective_post_equil`` : float — fraction of simulation
+                covered by the post-equil comparison window.
+              - ``comparison_sim_nos`` : list of int — previous sim_nos
+                compared against (x-axis for graphing).
+              - ``frobenius`` : dict of str -> list of float — normalised
+                Frobenius norms vs each comparison checkpoint, keyed by matrix
+                type (``'torsion'``, ``'alpha_carbon'``, ``'contact'``).
+                List order matches ``comparison_sim_nos``.
+              - ``jsd`` : dict of str -> list of float — JSD values vs each
+                comparison checkpoint, same structure as ``frobenius``.
         """
         from .retro_convergence_utils import (
             resolve_write_dir, resolve_cache_dir, resolve_traj_paths,
@@ -1220,7 +1237,8 @@ class FultonMarketAnalysis():
                 printf(f'sim_no={sim_no} ({100.0*(sim_no+1)/total_n_sims:.1f}%): '
                        f'pre-loaded {len(existing)} cached matrices from disk')
 
-        report = {}
+        report  = {}
+        metrics = {}
 
         for sim_no in targets:
             progress_pct = 100.0 * (sim_no + 1) / total_n_sims
@@ -1333,6 +1351,27 @@ class FultonMarketAnalysis():
 
                 report[sim_no] = checks
 
+                # Build per-sim_no metrics for downstream graphing.
+                # frob_results / jsd_results are Dict[str, Dict[int, float]]
+                # keyed by matrix name then by previous sim_no.
+                comparison_sim_nos = sorted(
+                    set().union(*(d.keys() for d in frob_results.values()))
+                )
+                metrics[sim_no] = {
+                    'equil_fraction':      equil_fraction,
+                    'first_valid_sim_no':  first_valid_sim_no,
+                    'effective_post_equil': effective_post_equil,
+                    'comparison_sim_nos':  comparison_sim_nos,
+                    'frobenius': {
+                        name: [frob_results[name].get(s) for s in comparison_sim_nos]
+                        for name in ('torsion', 'alpha_carbon', 'contact')
+                    },
+                    'jsd': {
+                        name: [jsd_results[name].get(s) for s in comparison_sim_nos]
+                        for name in ('torsion', 'alpha_carbon', 'contact')
+                    },
+                }
+
             except Exception as exc:
                 printf(f'ERROR: sim_no={sim_no} failed: {exc}')
                 import traceback; traceback.print_exc()
@@ -1346,4 +1385,4 @@ class FultonMarketAnalysis():
                 delattr(self, attr)
 
         print_summary_table(report, total_n_sims)
-        return report
+        return report, metrics
