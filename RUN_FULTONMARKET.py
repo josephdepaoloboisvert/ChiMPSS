@@ -62,7 +62,7 @@ parser.add_argument('--getcontacts_cores', default=10, type=int,
 
 args = parser.parse_args()
 
-from FultonMarket.FultonMarketwithAnalyzer import FultonMarket as FM
+from FultonMarket.fulton_market import FultonMarket as FM
 
 market = FM(input_pdb=args.input_pdb,
             input_system=args.input_system,

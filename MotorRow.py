@@ -195,12 +195,12 @@ class MotorRow():
         # Add restraint to ligand
         crds, prt_heavy_atoms, mem_heavy_atoms, lig_heavy_atoms = get_positions_from_pdb(pdb_in, lig_resname=self.lig_resname, lig_chain=self.lig_chain)
         if len(lig_heavy_atoms) > 0:
-            system = restrain_atoms(system, crds, np.array(lig_heavy_atoms)[:,0], rst_name='lig_k', rst_strength=86.68*(joule)/(angstrom*angstrom*mole))
+            system = restrain_atoms(system, crds, np.array(lig_heavy_atoms)[:,0], rst_name='lig_k', restraint_strength=86.68*(joule)/(angstrom*angstrom*mole))
         elif self.lig_resname is not None or self.lig_chain is not None:
             raise Exception('Could not find ligand...')
 
         # Protein Restraint
-        system = restrain_atoms(system, crds, np.array(prt_heavy_atoms), rst_name='prot_k', rst_strength=86.68*(joule)/(angstrom*angstrom*mole))
+        system = restrain_atoms(system, crds, np.array(prt_heavy_atoms), rst_name='prot_k', restraint_strength=86.68*(joule)/(angstrom*angstrom*mole))
         
         integrator = LangevinMiddleIntegrator(temp*kelvin, 1/picosecond, dt*femtosecond)
         simulation = Simulation(self.topology, system, integrator)
@@ -285,7 +285,7 @@ class MotorRow():
         # Ligand Restraint
         if restrain_lig:
             if len(lig_heavy_atoms) > 0:
-                system = restrain_atoms(system, crds, np.array(lig_heavy_atoms)[:,0], rst_name='lig_k', rst_strength=86.68*(joule)/(angstrom*angstrom*mole))
+                system = restrain_atoms(system, crds, np.array(lig_heavy_atoms)[:,0], rst_name='lig_k', restraint_strength=86.68*(joule)/(angstrom*angstrom*mole))
             elif self.lig_resname is not None or self.lig_chain is not None:
                 raise Exception('Could not find ligand...')   
                 
@@ -293,18 +293,18 @@ class MotorRow():
         if stepnum == 1:
             
             # Protein Restraint
-            system = restrain_atoms(system, crds, np.array(prt_heavy), rst_name='prot_k', rst_strength=86.68*(joule)/(angstrom*angstrom*mole))
+            system = restrain_atoms(system, crds, np.array(prt_heavy), rst_name='prot_k', restraint_strength=86.68*(joule)/(angstrom*angstrom*mole))
             
             #Membrane Restraint
-            system = restrain_atoms(system, crds, np.array(mem_heavy), rst_name='mem_k', rst_strength=86.68*(joule)/(angstrom*angstrom*mole))
+            system = restrain_atoms(system, crds, np.array(mem_heavy), rst_name='mem_k', restraint_strength=86.68*(joule)/(angstrom*angstrom*mole))
 
         elif stepnum == 2:
             
             # Protein Restraint
-            system = restrain_atoms(system, crds, np.array(prt_heavy), rst_name='prot_k', rst_strength=86.68*(joule)/(angstrom*angstrom*mole))
+            system = restrain_atoms(system, crds, np.array(prt_heavy), rst_name='prot_k', restraint_strength=86.68*(joule)/(angstrom*angstrom*mole))
             
             # Membrane Restraint
-            system = restrain_atoms(system, crds, np.array(mem_heavy), rst_name='mem_k', rst_strength=86.68*(joule)/(angstrom*angstrom*mole))
+            system = restrain_atoms(system, crds, np.array(mem_heavy), rst_name='mem_k', restraint_strength=86.68*(joule)/(angstrom*angstrom*mole))
 
             # Add MC Membrane Barostat
             system.addForce(MonteCarloMembraneBarostat(press*bar, 300*bar*nanometer, temp*kelvin,
@@ -313,11 +313,11 @@ class MotorRow():
             
         elif stepnum == 3:
             # Protein Restraint
-            system = restrain_atoms(system, crds, np.array(prt_heavy), rst_name='prot_k', rst_strength=86.68*(joule)/(angstrom*angstrom*mole))
+            system = restrain_atoms(system, crds, np.array(prt_heavy), rst_name='prot_k', restraint_strength=86.68*(joule)/(angstrom*angstrom*mole))
 
         elif stepnum == 4:
             # Protein Restraint
-            system = restrain_atoms(system, crds, np.array(prt_heavy), rst_name='prot_k', rst_strength=86.68*(joule)/(angstrom*angstrom*mole))
+            system = restrain_atoms(system, crds, np.array(prt_heavy), rst_name='prot_k', restraint_strength=86.68*(joule)/(angstrom*angstrom*mole))
 
             # Add MC Membrane Barostat
             system.addForce(MonteCarloMembraneBarostat(press*bar, 300*bar*nanometer, temp*kelvin,

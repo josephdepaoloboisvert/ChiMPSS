@@ -2,8 +2,8 @@
 Centralized logging utilities for ChiMPSS.
 
 Consolidates the printf lambda previously duplicated across:
-  FultonMarketUtils, ContactNetwork, Reporting, GetContactsHelper,
-  retro_convergence_utils, DistanceMatrixUtils
+  FultonMarketUtils, contact_network, Reporting, GetContactsHelper,
+  convergence, DistanceMatrixUtils
 """
 
 from datetime import datetime

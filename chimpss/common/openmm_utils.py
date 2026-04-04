@@ -91,7 +91,7 @@ def get_positions_from_pdb(fname_pdb, lig_resname=None, lig_chain=None):
 #  Restraints
 # ---------------------------------------------------------------------------
 
-def restrain_atoms(system, crds, atom_inds, rst_name='fc_pos', rst_strength=20.0):
+def restrain_atoms(system, crds, atom_inds, rst_name='fc_pos', restraint_strength=20.0):
     """
     Add a flat-bottom harmonic positional restraint to selected atoms.
 
@@ -105,7 +105,7 @@ def restrain_atoms(system, crds, atom_inds, rst_name='fc_pos', rst_strength=20.0
     rst_name : str
         Name of the global restraint-strength parameter in the force
         expression.  Default ``'fc_pos'``.
-    rst_strength : float
+    restraint_strength : float
         Restraint force constant.  Default ``20.0``.
 
     Returns
@@ -113,7 +113,7 @@ def restrain_atoms(system, crds, atom_inds, rst_name='fc_pos', rst_strength=20.0
     system : openmm.System
     """
     rest = CustomExternalForce(f'{rst_name}*periodicdistance(x,y,z,x0,y0,z0)^2')
-    rest.addGlobalParameter(rst_name, rst_strength)
+    rest.addGlobalParameter(rst_name, restraint_strength)
     rest.addPerParticleParameter('x0')
     rest.addPerParticleParameter('y0')
     rest.addPerParticleParameter('z0')

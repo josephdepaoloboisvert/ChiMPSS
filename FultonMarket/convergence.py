@@ -1,5 +1,5 @@
 """
-retro_convergence_utils.py
+convergence.py
 
 Utility functions supporting FultonMarketAnalysis.retro_analyze_all and
 FultonMarketAnalysis.retro_convergence_report. Not intended for direct use.
@@ -146,23 +146,23 @@ def compute_distance_matrices(
     resampled MDTraj trajectory.
 
     Only passes getcontacts kwargs that are explicitly set — avoids passing
-    unexpected keyword arguments to getContactDistanceMatrix.
+    unexpected keyword arguments to get_contact_distance_matrix.
     """
     from .FultonMarketUtils import (
-        getTorsionalDistanceMatrix,
-        getAlphaCarbonDistanceMatrix,
-        getContactDistanceMatrix,
+        get_torsional_distance_matrix,
+        get_alpha_carbon_distance_matrix,
+        get_contact_distance_matrix,
     )
 
-    torsional    = getTorsionalDistanceMatrix(traj, selection_string='protein or resname UNK')
-    alpha_carbon = getAlphaCarbonDistanceMatrix(traj, selection_string='protein or resname UNK')
+    torsional    = get_torsional_distance_matrix(traj, selection_string='protein or resname UNK')
+    alpha_carbon = get_alpha_carbon_distance_matrix(traj, selection_string='protein or resname UNK')
 
     contact_kwargs = dict(top_fn=pdb_out, traj_fn=dcd_out, output_fn=contacts_tsv)
     if getcontacts_script  is not None: contact_kwargs['getcontacts_script']  = getcontacts_script
     if conda_env           is not None: contact_kwargs['conda_env']           = conda_env
     if getcontacts_python  is not None: contact_kwargs['getcontacts_python']  = getcontacts_python
 
-    contact_distance, _ = getContactDistanceMatrix(**contact_kwargs)
+    contact_distance, _ = get_contact_distance_matrix(**contact_kwargs)
 
     return {
         'torsion':      torsional,

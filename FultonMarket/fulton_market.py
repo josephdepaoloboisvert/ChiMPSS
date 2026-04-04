@@ -21,14 +21,14 @@ from typing import List
 import warnings
 warnings.filterwarnings('ignore')
 
-from .RandolphwithAnalyzer import Randolph
+from .randolph import Randolph
 from .FultonMarketUtils import (
     printf, geometric_distribution, convert_to_TrackedQuantity,
     build_sampler_states, detect_energy_equil,
-    getTorsionalDistanceMatrix, getAlphaCarbonDistanceMatrix,
-    getContactDistanceMatrix, frobenius_norm, jsd_distance_matrices,
+    get_torsional_distance_matrix, get_alpha_carbon_distance_matrix,
+    get_contact_distance_matrix, frobenius_norm, jsd_distance_matrices,
 )
-from .FultonMarketAnalysis import FultonMarketAnalysis
+from .analysis import FultonMarketAnalysis
 
 np.seterr(divide='ignore', invalid='ignore')
 faulthandler.enable()
@@ -174,7 +174,7 @@ class FultonMarket():
             previous checkpoint pairwise distance distribution for convergence.
             Default 0.10.
         getContacts_Info : dict, optional
-            Keyword arguments forwarded to getContactDistanceMatrix. Required
+            Keyword arguments forwarded to get_contact_distance_matrix. Required
             keys when contact convergence is used:
               - getcontacts_script (str): path to get_dynamic_contacts.py
               - conda_env (str): name of the conda env containing getContacts;
@@ -519,7 +519,7 @@ class FultonMarket():
             previous checkpoint pairwise distance distribution for convergence.
             Bounded in [0, 1]. Default 0.10.
         getContacts_Info : dict, optional
-            Keyword arguments forwarded directly to getContactDistanceMatrix.
+            Keyword arguments forwarded directly to get_contact_distance_matrix.
             See run() docstring for accepted keys. Default None.
 
         Returns
@@ -548,9 +548,9 @@ class FultonMarket():
         )
  
         # Compute current distance matrices
-        torsional    = getTorsionalDistanceMatrix(traj, selection_string='protein or resname UNK')
-        alpha_carbon = getAlphaCarbonDistanceMatrix(traj, selection_string='protein or resname UNK')
-        contact_distance, _ = getContactDistanceMatrix(
+        torsional    = get_torsional_distance_matrix(traj, selection_string='protein or resname UNK')
+        alpha_carbon = get_alpha_carbon_distance_matrix(traj, selection_string='protein or resname UNK')
+        contact_distance, _ = get_contact_distance_matrix(
             top_fn=os.path.join(sim_dir, 'resampled_top.pdb'),
             traj_fn=os.path.join(sim_dir, 'resampled_trj.dcd'),
             output_fn=os.path.join(sim_dir, 'resampled_contacts.tsv'),

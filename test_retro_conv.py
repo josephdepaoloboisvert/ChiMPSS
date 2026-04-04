@@ -1,4 +1,4 @@
-from FultonMarket.FultonMarketAnalysis import FultonMarketAnalysis
+from FultonMarket.analysis import FultonMarketAnalysis
 
 test = FultonMarketAnalysis(input_dir='/expanse/lustre/projects/iit122/josephdb/KOR_Luis/output/RS1125_0/',
                             pdb='/expanse/lustre/projects/iit122/josephdb/KOR_Luis/Luis_Data/RS1125.pdb',

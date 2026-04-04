@@ -22,7 +22,7 @@ from typing import List, Literal
 import warnings
 warnings.filterwarnings('ignore')
 
-from .ContactNetwork import ContactNetworkBuilder
+from .contact_network import ContactNetworkBuilder
 
 
 printf = lambda my_string: print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + ' // ' + str(my_string), flush=True)
@@ -75,15 +75,6 @@ def _interpolate_new_positions(init_positions, init_box_vectors, init_velocities
 
     return init_positions, init_box_vectors, init_velocities
 
-
-def build_thermodynamic_states(self):
-
-    # Build thermodynamic states
-    printf(f'Creating {len(self.temperatures)} Thermodynamic States')
-    self.thermodynamic_states = [ThermodynamicState(system=self.system, temperature=T) for T in self.temperatures]
-    printf('Done Creating Thermodynamic States')
-    printf(f'Assigning {len(self.spring_centers)} Restraints')
-    assert len(self.temperatures) == len(self.spring_centers)
 
 
 def build_sampler_states(n_replicates: int, pos: np.array, box_vec: np.array, velos: np.array=None):
@@ -179,7 +170,7 @@ def rmsd(a, b):
     else:
         return np.array([np.sqrt(((a[i] - b[i])**2).sum(-1).mean()) for i in range(a.shape[0])])
 
-def plot_MRC(domains, mean_weighted_rc, mean_weighted_rc_err, savefig: str=None):
+def plot_mrc(domains, mean_weighted_rc, mean_weighted_rc_err, savefig: str=None):
 
     fig, ax = plt.subplots()
     
@@ -193,7 +184,7 @@ def plot_MRC(domains, mean_weighted_rc, mean_weighted_rc_err, savefig: str=None)
         fig.savefig(savefig)
 
 
-def PCA_convergence_detection(rc, rc_err):
+def pca_convergence_detection(rc, rc_err):
 
     converged = np.array([False for i in range(len(rc)-1)])
     for i, (rc_i, rc_err_i) in enumerate(zip(rc[:-1], rc_err[:-1])):
@@ -205,7 +196,7 @@ def PCA_convergence_detection(rc, rc_err):
     return converged
 
 
-def write_traj_from_pos_boxvecs(pos, box_vec, top, sele_str, receptor_sele_str='chainid 0', correction: bool=True):        
+def write_traj_from_pos_box_vecs(pos, box_vec, top, sele_str, receptor_sele_str='chainid 0', correction: bool=True):        
     
     # Create traj obj
     traj = md.Trajectory(xyz=pos.copy(), 
@@ -242,7 +233,7 @@ def write_traj_from_pos_boxvecs(pos, box_vec, top, sele_str, receptor_sele_str='
     return traj
 
 
-def get_traj_PCA(traj, explained_variance_threshold: float=None):
+def get_traj_pca(traj, explained_variance_threshold: float=None):
     """
     """
     # PCA
@@ -270,10 +261,10 @@ def calculate_weighted_rc(reduced_cartesian, resampled_inds, upper_limit, pca_we
     
 
 @staticmethod
-def resample_with_MBAR(objs: List, u_kln: np.array, N_k: np.array, size: int, reshape_weights: tuple=None, specify_state: int=0, return_inds: bool=False, return_weights: bool=False, return_resampled_weights: bool=False, replace: bool=True):
+def resample_with_mbar(objs: List, u_kln: np.array, N_k: np.array, size: int, reshape_weights: tuple=None, specify_state: int=0, return_inds: bool=False, return_weights: bool=False, return_resampled_weights: bool=False, replace: bool=True):
 
     # Get MBAR weights
-    weights = compute_MBAR_weights(u_kln, N_k)
+    weights = compute_mbar_weights(u_kln, N_k)
 
     # Reshape weights if specified
     if reshape_weights is not None:
@@ -322,7 +313,7 @@ def resample_with_MBAR(objs: List, u_kln: np.array, N_k: np.array, size: int, re
 
 
 @staticmethod
-def compute_MBAR_weights(u_kln, N_k):
+def compute_mbar_weights(u_kln, N_k):
     """
     """
     mbar = MBAR(u_kln, N_k, initialize='BAR')
@@ -330,7 +321,7 @@ def compute_MBAR_weights(u_kln, N_k):
     return mbar.weights()
     
 @staticmethod
-def detect_PC_equil(pc, reduced_cartesian):
+def detect_pc_equil(pc, reduced_cartesian):
     t0, _, _ = detect_equilibration(reduced_cartesian[:,pc])
     return t0
     
@@ -378,7 +369,7 @@ def get_angles_and_periods(traj):
     return angles, periods
 
 
-def getTorsionalDistanceMatrix(traj, selection_string=None):
+def get_torsional_distance_matrix(traj, selection_string=None):
     if selection_string:
         traj = traj.atom_slice(traj.top.select(selection_string))
     angles, periods = get_angles_and_periods(traj)
@@ -390,7 +381,7 @@ def getTorsionalDistanceMatrix(traj, selection_string=None):
     return distance_matrix
 
 
-def getAlphaCarbonDistanceMatrix(traj, selection_string=None):
+def get_alpha_carbon_distance_matrix(traj, selection_string=None):
     import itertools
     
     if selection_string:
@@ -408,7 +399,7 @@ def getAlphaCarbonDistanceMatrix(traj, selection_string=None):
     return distance_matrix
 
 
-def getContactDistanceMatrix(top_fn, traj_fn, output_fn, conda_env=None, getcontacts_script=None, getcontacts_python=None, cores: int = 10):
+def get_contact_distance_matrix(top_fn, traj_fn, output_fn, conda_env=None, getcontacts_script=None, getcontacts_python=None, cores: int = 10):
     """
     Run getContacts in a specified conda environment and compute a frame x frame
     contact distance matrix.

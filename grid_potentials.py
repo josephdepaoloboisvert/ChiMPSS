@@ -9,9 +9,9 @@ from openmm.unit import *
 
 #sys.path.append('/media/volume/Josephs-Volume/githubs/Bridgeport/')
 
-import ForceFields.ForceFieldHandler as ff_handler
+import ForceFields.force_fields as ff_handler
 from Ligand.Ligand import Ligand
-from ForceFields.OpenMMJoiner import Joiner
+from ForceFields.joiner import Joiner
 
 from MotorRow import MotorRow
 

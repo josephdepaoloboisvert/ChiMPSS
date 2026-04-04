@@ -262,7 +262,7 @@ class FultonMarketAnalysis():
         
         if equilibration_method == 'PCA':
             self.get_PCA(state_no=0, stride=stride, explained_variance_threshold=0.9)
-            equil_times = np.array([detect_PC_equil(pc, self.reduced_cartesian) for pc in range(self.n_components)])
+            equil_times = np.array([detect_pc_equil(pc, self.reduced_cartesian) for pc in range(self.n_components)])
             self.t0 = int(np.sum(equil_times * (self.explained_variance / self.explained_variance.sum()))) * stride
         
         elif equilibration_method == 'energy':
@@ -321,7 +321,7 @@ class FultonMarketAnalysis():
         u_kln = np.array([self.energies[self.t0:, :, k].flatten() for k in range(self.energies.shape[2])])
         N_k = np.full(self.energies.shape[2], self.energies[self.t0:].shape[0])
 
-        self.resampled_inds, self.weights, self.resampled_weights = resample_with_MBAR(objs=[self.flat_inds],
+        self.resampled_inds, self.weights, self.resampled_weights = resample_with_mbar(objs=[self.flat_inds],
                                                                                        u_kln=u_kln,
                                                                                        N_k=N_k,
                                                                                        size=n_samples,
@@ -415,7 +415,7 @@ class FultonMarketAnalysis():
             If True, the assembled MDTraj trajectory is returned. Default
             False.
         correction : bool
-            Passed to ``write_traj_from_pos_boxvecs`` for periodic boundary
+            Passed to ``write_traj_from_pos_box_vecs`` for periodic boundary
             correction. Default True.
         alt_load_positions_name : str, optional
             Alternative filename (without directory) for the positions numpy
@@ -443,7 +443,7 @@ class FultonMarketAnalysis():
             pos[i]     = np.array(self.positions[sim_no][sim_iter][sim_rep_ind])
             box_vec[i] = np.array(self.box_vectors[sim_no][sim_iter][sim_rep_ind])
 
-        self.traj = write_traj_from_pos_boxvecs(pos, box_vec, self.top, self.sele_str, correction=correction)
+        self.traj = write_traj_from_pos_box_vecs(pos, box_vec, self.top, self.sele_str, correction=correction)
         self.traj[0].save_pdb(pdb_out)
         self.traj.save_dcd(dcd_out)
         printf(f'{self.traj.n_frames} frames written to {pdb_out} and {dcd_out}')
@@ -492,7 +492,7 @@ class FultonMarketAnalysis():
             pos[i]     = np.array(self.positions[sim_no][sim_iter][sim_rep_ind])
             box_vec[i] = np.array(self.box_vectors[sim_no][sim_iter][sim_rep_ind])
 
-        return write_traj_from_pos_boxvecs(pos, box_vec, self.top, self.sele_str)
+        return write_traj_from_pos_box_vecs(pos, box_vec, self.top, self.sele_str)
 
 
     # ------------------------------------------------------------------
@@ -547,7 +547,7 @@ class FultonMarketAnalysis():
             sele = traj.topology.select('protein')
         traj = traj.atom_slice(sele)
 
-        pca, self.reduced_cartesian, self.explained_variance, self.n_components = get_traj_PCA(
+        pca, self.reduced_cartesian, self.explained_variance, self.n_components = get_traj_pca(
             traj, explained_variance_threshold=explained_variance_threshold
         )
         printf(f'Reduced Cartesian shape: {self.reduced_cartesian.shape}')
@@ -836,7 +836,7 @@ class FultonMarketAnalysis():
                 state_map      = filled_map[:, state_no]
                 N_k = np.array([state_energies.shape[0]])
 
-                res_energies, res_mappings, res_inds = resample_with_MBAR(
+                res_energies, res_mappings, res_inds = resample_with_mbar(
                     objs=[state_energies, state_map],
                     u_kln=np.array([state_energies[:, state_no]]),
                     N_k=N_k,
@@ -1005,7 +1005,7 @@ class FultonMarketAnalysis():
             Nested dict keyed by ``sim_no`` then matrix name
             (``'torsion'``, ``'alpha_carbon'``, ``'contact'``).
         """
-        from .retro_convergence_utils import (
+        from .convergence import (
             resolve_write_dir, resolve_cache_dir, resolve_traj_paths,
             load_matrices, save_matrices,
             compute_distance_matrices, log_mode,
@@ -1180,7 +1180,7 @@ class FultonMarketAnalysis():
             Per-sim_no check results. All display values are percentages.
             Final key ``'STOP'`` is True when all checks pass.
         """
-        from .retro_convergence_utils import (
+        from .convergence import (
             resolve_write_dir, resolve_cache_dir, resolve_traj_paths,
             load_matrices, save_matrices,
             compute_distance_matrices,

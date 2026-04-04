@@ -20,7 +20,7 @@ Optional Arguments:
 
 # Imports
 import os, sys, argparse
-from RepairProtein import RepairProtein
+from repair_protein import RepairProtein
 
 # Arguments
 parser = argparse.ArgumentParser(description='', formatter_class=argparse.ArgumentDefaultsHelpFormatter)

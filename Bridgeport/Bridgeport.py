@@ -20,13 +20,13 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from utils.ProteinPreparer import ProteinPreparer
-from RepairProtein.RepairProtein import RepairProtein
-from ForceFields.ForceFieldHandler import ForceFieldHandler
-from ForceFields.OpenMMJoiner import Joiner
+from utils.protein_preparer import ProteinPreparer
+from RepairProtein.repair_protein import RepairProtein
+from ForceFields.force_fields import ForceFieldHandler
+from ForceFields.joiner import Joiner
 from Ligand.Ligand import Ligand
 from Ligand.Analogue import Analogue
-from Ligand.MutatedPeptide import MutatedPeptide
+from Ligand.mutated_peptide import MutatedPeptide
 from Minimizer.Minimizer import Minimizer
 
 class Bridgeport():

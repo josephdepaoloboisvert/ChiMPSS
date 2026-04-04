@@ -45,10 +45,10 @@ def get_positions_from_pdb(fname_pdb, lig_resname: str=None, lig_chain: str=None
 
     return np.array(coords), prt_heavy_atoms, mem_heavy_atoms, lig_heavy_atoms
 
-def restrain_atoms(system, crds, atom_inds, rst_name: str='fc_pos', rst_strength: float=20.0):
+def restrain_atoms(system, crds, atom_inds, rst_name: str='fc_pos', restraint_strength: float=20.0):
 
     rest = CustomExternalForce(f'{rst_name}*periodicdistance(x,y,z,x0,y0,z0)^2')
-    rest.addGlobalParameter(rst_name, rst_strength)
+    rest.addGlobalParameter(rst_name, restraint_strength)
     rest.addPerParticleParameter('x0')
     rest.addPerParticleParameter('y0')
     rest.addPerParticleParameter('z0')

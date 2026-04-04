@@ -9,7 +9,7 @@ try:
 except:
     from Ligand import Ligand
     from Analogue import Analogue
-from ForceFields.ForceFieldHandler import ForceFieldHandler
+from ForceFields.force_fields import ForceFieldHandler
 from openmm import *
 from openmm.app import *
 import mdtraj as md
