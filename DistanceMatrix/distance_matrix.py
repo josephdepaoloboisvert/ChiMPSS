@@ -9,23 +9,25 @@ from .DistanceMatrixUtils import _compute_component_matrices, _compute_matrix, p
 
 class DistanceMatrix():
     """
+    Frame-by-frame pairwise structural distance matrix for an MD trajectory.
+
+    Combines torsion, alpha-carbon, and hydrogen-bond component matrices
+    with user-specified weights into a single composite distance matrix.
+
+    Parameters
+    ----------
+    super_traj : md.Trajectory
+        Trajectory with all sub-simulation data concatenated.
+    ca_resSeqs : list of int, optional
+        Residue sequence numbers to include in alpha-carbon distance
+        calculations. If None, all residues are used.
     """
 
     def __init__(self, super_traj: md.Trajectory, ca_resSeqs: List[int]=None):
-        """ 
-        Initialize a DistanceMatrix object.
+        """
+        Initialize a DistanceMatrix from an aggregated trajectory.
 
-        Parameters:
-        ----------
-            super_traj (md.Trajectory): 
-                Trajectory with all data aggregated into one trajectory.         
-            
-            ca_resSeqs (list of ints): 
-                List of residue numbers that will be used for pairwise distance calculations. 
-
-        Returns:
-        --------
-            DistanceMatrix object.
+        See class docstring for parameter descriptions.
         """
 
         # Attributes
@@ -35,18 +37,22 @@ class DistanceMatrix():
 
     def compute_component_matrices(self, load_matrices: str=None, stride: int=1, save_matrices: str=os.getcwd()):
         """
-        Compute torsion, CA, and Hbond matrices. 
+        Compute torsion, alpha-carbon, and hydrogen-bond distance matrices.
 
-        Parameters:
-        ----------        
-            load_matrices (str): 
-                Absolute string path to directory where matrices will be loaded and are name torions_distances.txt, ca_distances.txt, hbond_distances.txt. Default is None which will not load matrices.
+        Results are stored as ``self.torsion_distances``, ``self.ca_distances``,
+        and ``self.hbond_distances``.
 
-            stride (int):
-                If load_matrices is proveded, stride is for parsing distance matrix based on simulation timestep. Default is 1 to load everything. 
-                
-            save_matrices (str): 
-                Absolute string path to directory where matrices will be saved as torions_distances.txt, ca_distances.txt, hbond_distances.txt. Default is None which will not save matrices.       
+        Parameters
+        ----------
+        load_matrices : str, optional
+            Path to a directory containing pre-computed matrices named
+            ``torsions_distances.txt``, ``ca_distances.txt``, and
+            ``hbond_distances.txt``. If None, matrices are computed fresh.
+        stride : int, optional
+            Sub-sampling stride applied after loading saved matrices. Default 1.
+        save_matrices : str, optional
+            Path to a directory where computed matrices are saved. Defaults to
+            the current working directory.
         """
 
         # Compute 
@@ -62,12 +68,21 @@ class DistanceMatrix():
 
     def compute_matrix(self, weights: List[float]=[0.33, 0.33, 0.33], save_matrices=os.getcwd()):
         """
-        Combine weighted self.torsion_distances, self.ca_distances, self.hbond_distances to return final distance matrix
+        Combine component matrices into a single weighted distance matrix.
 
-        Parameters:
-        -----------
-            weights (List[float]):
-                Weights for combining matrices into final distance matrix. Shape of weights must follow format [Torsions weight (float), CA weight (float), Hbond weight (float)]
+        Parameters
+        ----------
+        weights : list of float, optional
+            Weights for [torsion, alpha-carbon, hydrogen-bond] matrices.
+            Default ``[0.33, 0.33, 0.33]``.
+        save_matrices : str, optional
+            Directory path for saving the composite matrix. Defaults to the
+            current working directory.
+
+        Returns
+        -------
+        matrix : np.ndarray
+            Composite distance matrix of shape (n_frames, n_frames).
         """
 
         # Combine matrices

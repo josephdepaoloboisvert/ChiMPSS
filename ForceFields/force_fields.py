@@ -24,64 +24,54 @@ nonbonded_methods = {'NoCutoff': NoCutoff,
 
 class ForceFieldHandler():
     """
-    A Class for parameterization of a structure file. Returns the necessary elements to construct an openmm simulation, System, Topology, and Positions.
-    SDF File - Ligand to be parameterized with OpenFF
-    PDB File - Environment File to be parameterized with Amber FF14SB, Lipid17, OPC3 XML Files
-    - Override the defaults with optional user specified files. Extensions must be offxml for an sdf file or xml for a pdb file.
-    
-    Default Usage:
-    --------------
-        system, topology, positions = ForceFieldHandler(INPUTS).main()
-    
-    Parameters:
-    -----------
-        structure_file - Input, either and an sdf or pdb file
-        force_field_files - Optional Input - offxml or xml files. Can use included forcefields with either OpenFF or OpenMM
-    
-    Returns:
-    -------
-        system, topology, positions as a 3-tuple
-    
-    Attributes:
-    -----------
-        default_xmls (dict): 
-            Default XML files for OpenFF and OpenMM.
-            
-        structure_file (str): 
-            Input file path, either an SDF or PDB file.
-            
-        working_mode (str): 
-            Mode of operation based on file extension, either 'OpenFF' or 'OpenMM'.
-            
-        xmls (list): 
-            List of XML files to be used for parameterization.
-    
-    Methods:
+    Parameterize a structure file and return an OpenMM (System, Topology, Positions) tuple.
+
+    Supports two modes selected automatically from the input file extension:
+
+    * **OpenFF mode** (``.sdf`` input): ligand parameterized with the SMIRNOFF
+      force field (``openff-2.1.0.offxml`` by default).
+    * **OpenMM mode** (``.pdb`` input): protein/environment parameterized with
+      Amber ff14SB + Lipid17 + OPC3 water model by default.
+
+    Parameters
+    ----------
+    structure_file : str
+        Path to an SDF or PDB file containing the structure to parameterize.
+    force_field_files : list of str, optional
+        Force-field file paths to use instead of (or in addition to) the
+        defaults. Extensions must match the mode: ``.offxml`` for SDF input,
+        ``.xml`` for PDB input. Default None.
+    use_defaults : bool, optional
+        If True, include the built-in default force fields alongside any
+        files in ``force_field_files``. Default True.
+
+    Attributes
+    ----------
+    default_xmls : dict
+        Mapping of mode name to list of default force-field file paths.
+    structure_file : str
+        The input file path.
+    working_mode : str
+        ``'OpenFF'`` or ``'OpenMM'``, determined from the file extension.
+    xmls : list of str
+        Resolved list of force-field files used during parameterization.
+
+    Examples
     --------
-        __init__(self, structure_file, force_field_files=None, use_defaults: bool=True): 
-            Initializes the ForceFieldHandler object with a structure file and optional force field files.
-            
-        _parse_file(self, file_fn): 
-            Determines the working mode ('OpenFF' or 'OpenMM') based on the file extension.
-        
-        main(self, use_rdkit: bool=False): 
-            Main method for parameterization. Returns a tuple containing the system, topology, and positions.
-        
-        generate_custom_xml(self, out_xml, name): 
-            Generates a custom XML file for parameterization.
-        
-        neutralizeMol(mol): 
-            Neutralizes the given molecule by setting radical electrons and formal charges to zero.
+    Parameterize a ligand SDF::
+
+        sys, top, pos = ForceFieldHandler('ligand.sdf').main()
+
+    Parameterize a protein PDB::
+
+        sys, top, pos = ForceFieldHandler('system.pdb').main()
     """
     
     def __init__(self, structure_file, force_field_files=None, use_defaults: bool=True):
         """
-        Parameters:
-            structure_file: string: Path to an SDF or PDB file containing the structure to be parameterized.
-            force_field_files: [string]: Default Nonetype - provide a list of strings to use user-defined force field files
-            use_defaults: bool: Default True - change to False when providing user defined force field files (when force_field_files != None)
-        Returns:
-            None
+        Initialize ForceFieldHandler with a structure file and optional force fields.
+
+        See class docstring for parameter descriptions.
         """
         self.default_xmls = {'OpenFF': ['openff-2.1.0.offxml'], 
                         'OpenMM': ['amber14/protein.ff14SB.xml', 
@@ -114,15 +104,25 @@ class ForceFieldHandler():
 
     def _parse_file(self, file_fn):
         """
-        A short method to determine the type of force field file to use based on the extension of the structure file provided.
-        Currently SDF structure files -> OFFXML (OpenFF) forcefield files
-                  PDB structure files -> XML (OpenMM) forcefield files
-        Current support is only for these two files types
+        Determine the parameterization mode from a file extension.
 
-        Parameters:
-            file_fn: string: path to the structure file
+        SDF and OFFXML files map to ``'OpenFF'``; PDB and XML files map to
+        ``'OpenMM'``.
+
+        Parameters
+        ----------
+        file_fn : str
+            Path to the file whose extension will be inspected.
+
         Returns
-            mode: string: either "OpenFF" or "OpenMM", this string indicates which type of default force field to use
+        -------
+        mode : str
+            Either ``'OpenFF'`` or ``'OpenMM'``.
+
+        Raises
+        ------
+        Exception
+            If the file extension is not in the supported set.
         """
         ext = os.path.splitext(file_fn)[-1]
         supported_openff_types = ['.sdf', '.offxml']
@@ -138,13 +138,20 @@ class ForceFieldHandler():
 
     def main(self, use_pme: bool=True):
         """
-        The intended main usage case.  Parameterize ligands from an SDF file with OpenFF (.offxml) parameters and
-        environment/protein from a PDB file with OpenMM (.xml) parameters.
+        Parameterize the structure and return an OpenMM (System, Topology, Positions) tuple.
 
-        Paremeters:
-            use_pme: Default True: Use the PME nonbonded method.  Otherwise uses openmm default of NoCutOff
-        Returns:
-            (sys, top, positions): tuple - A 3-tuple of OpenMM System, OpenMM Topology, and coordinate array of positions
+        Parameters
+        ----------
+        use_pme : bool or str, optional
+            Nonbonded method for OpenMM mode. ``True`` uses PME (default),
+            ``False`` uses the OpenMM default (NoCutoff), or pass a string key
+            from ``{'NoCutoff', 'CutoffNonPeriodic', 'CutoffPeriodic',
+            'Ewald', 'PME'}`` to select explicitly. Ignored in OpenFF mode.
+
+        Returns
+        -------
+        result : tuple of (System, Topology, Quantity)
+            A 3-tuple of the OpenMM System, Topology, and positions.
         """
         if self.working_mode == 'OpenFF':
             try:
