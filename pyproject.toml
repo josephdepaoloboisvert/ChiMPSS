@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "chimpss"
+version = "0.1.0"
+description = "Chicago Membrane Protein Simulation Suite"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+
+# Core runtime dependencies (heavy scientific stack — install via conda first)
+dependencies = [
+    "numpy",
+    "scipy",
+    "mdtraj",
+    "mdanalysis",
+    "openmmtools",
+    "netCDF4",
+]
+
+[project.scripts]
+chimpss-bridgeport        = "scripts.run_bridgeport:main"
+chimpss-motor-row         = "scripts.run_motor_row:main"
+chimpss-fulton-market     = "scripts.run_fulton_market:main"
+chimpss-fulton-market-mpi = "scripts.run_fulton_market_mpi:main"
+chimpss-docking           = "scripts.run_docking:main"
+chimpss-repair-protein    = "scripts.run_repair_protein:main"
+chimpss-adjust-system     = "scripts.adjust_system:main"
+chimpss-recovery          = "scripts.recovery:main"
+
+[tool.setuptools.packages.find]
+# Auto-discover all Python packages (directories with __init__.py)
+where = ["."]
+
+[tool.setuptools.package-data]
+# Include OpenMM force field XML files shipped with the package
+"ForceFields" = ["**/*.xml", "**/*.pdb"]

@@ -1,72 +1,73 @@
-import os
-import argparse
-from Docking.Docking import Docking
-from typing import List
+#!/usr/bin/env python
+"""Run an Autodock Vina docking job."""
 
-# List of integers
+import argparse
+import os
+
+
 def list_of_ints(arg):
     return list(map(int, arg.split(',')))
 
-# Arguments
-parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-parser.add_argument('-r', '--receptor_path', type=str, help='path to .pdbqt file of receptor', required=True)
-parser.add_argument('-l', '--ligand_path', type=str, help='path to .pdbqt file of ligand', required=True)
-parser.add_argument('-ol', '--ligand_out_dir', type=str, help='path to directory to store docked poses', default='./')
-parser.add_argument('--config_dir', type=str, help='path to directory to store Autodock vina configuration files', default='./')
-parser.add_argument('--box_center', type=list_of_ints, help='list of box-center positions: x-coord,y-coord,z-coord', default=[0, 0, 0])
-parser.add_argument('--box_dim', type=list_of_ints, help='list of box dimensions (Angstrom): x-size,y-size,z-size', default=[15, 15, 15])
-parser.add_argument('--n_poses', type=int, help='number of docked poses', default=20)
-parser.add_argument('--exhaustiveness', type=int, help='level of exhaustiveness', default=8)
-parser.add_argument('--min_rmsd', type=float, help='to save a new docked pose, the new pose must surpass the minimum rmsd of new pose compared to previous poses', default=1.0)
-parser.add_argument('--compare', nargs=3, help='Requires 3 arguments delimited by a space. path to .pdb file with both receptor and ligand used for reference, chainid of protein to align to docking structure, and MDAnalysis selection string to parse the ligand from ref_pdb file. EX: --compare /path/to/ref.pdb R "selection string".')
 
-args = vars(parser.parse_args())
+def main():
+    parser = argparse.ArgumentParser(
+        description='Run an Autodock Vina docking job.',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument('-r', '--receptor_path', type=str, required=True,
+                        help='Path to .pdbqt file of receptor')
+    parser.add_argument('-l', '--ligand_path', type=str, required=True,
+                        help='Path to .pdbqt file of ligand')
+    parser.add_argument('-ol', '--ligand_out_dir', type=str, default='./',
+                        help='Directory to store docked poses')
+    parser.add_argument('--config_dir', type=str, default='./',
+                        help='Directory to store Autodock Vina configuration files')
+    parser.add_argument('--box_center', type=list_of_ints, default=[0, 0, 0],
+                        help='Box-center coordinates: x,y,z')
+    parser.add_argument('--box_dim', type=list_of_ints, default=[15, 15, 15],
+                        help='Box dimensions in Angstrom: x,y,z')
+    parser.add_argument('--n_poses', type=int, default=20,
+                        help='Number of docked poses')
+    parser.add_argument('--exhaustiveness', type=int, default=8,
+                        help='Level of exhaustiveness')
+    parser.add_argument('--min_rmsd', type=float, default=1.0,
+                        help='Minimum RMSD between saved poses')
+    parser.add_argument('--compare', nargs=3, metavar=('REF_PDB', 'CHAIN', 'SELECTION'),
+                        help='Reference PDB, chain ID, and MDAnalysis selection string '
+                             'for comparison. E.g.: --compare /path/ref.pdb R "resname LIG"')
+    args = parser.parse_args()
 
-rec_path = args['receptor_path']
-lig_path = args['ligand_path']
-ligand_out_dir = args['ligand_out_dir']
-config_dir = args['config_dir']
-box_center = args['box_center']
-box_dim = args['box_dim']
-n_poses = args['n_poses']
-exhaustiveness = args['exhaustiveness']
-min_rmsd = args['min_rmsd']
-compare_str = args['compare']
+    if not os.path.exists(args.receptor_path):
+        raise FileNotFoundError(f"Receptor file not found: {args.receptor_path}")
+    if not os.path.exists(args.ligand_path):
+        raise FileNotFoundError(f"Ligand file not found: {args.ligand_path}")
 
-# Assert paths exist
-if os.path.exists(rec_path):
-    print('')
-else:
-    raise FileNotFoundError("Must provide path to RECEPTOR.pdbqt")
-if os.path.exists(lig_path):
-    print('')
-else:
-    raise FileNotFoundError("Must provide path to LIGAND.pdbqt")
+    from Docking.Docking import Docking
 
-# Run Docking
-docking = Docking(receptor_path=rec_path,
-                  ligand_path=lig_path,
-                  config_dir=config_dir)
+    docking = Docking(
+        receptor_path=args.receptor_path,
+        ligand_path=args.ligand_path,
+        config_dir=args.config_dir,
+    )
+    docking.set_box(
+        box_center=args.box_center,
+        box_dim=args.box_dim,
+    )
+    docking.dock(
+        lig_out_dir=args.ligand_out_dir,
+        n_poses=args.n_poses,
+        exhaustiveness=args.exhaustiveness,
+        min_rmsd=args.min_rmsd,
+    )
 
-docking.set_box(box_center=box_center,
-                box_dim=box_dim)
+    if args.compare is not None:
+        ref_pdb, ref_chainid, ref_lig_sele_str = args.compare
+        docking.compare(
+            ref_pdb=ref_pdb,
+            ref_chainid=ref_chainid,
+            ref_lig_sele_str=ref_lig_sele_str,
+        )
 
-docking.dock(lig_out_dir=ligand_out_dir,
-             n_poses=n_poses,
-             exhaustiveness=exhaustiveness,
-             min_rmsd=min_rmsd)
 
-# Run compare analysis, if specified
-if compare_str != None:
-    try:
-        ref_pdb, ref_chainid, ref_lig_sele_str = compare_str
-        print(ref_pdb, ref_chainid, ref_lig_sele_str)
-    except:
-        raise AssertionError('--compare Requires 3 arguments delimited by a space. path to .pdb file with both receptor and ligand used for reference, chainid of protein to align to docking structure, and MDAnalysis selection string to parse the ligand from ref_pdb file. EX: --compare /path/to/ref.pdb R "selection string".')
-
-    docking.compare(ref_pdb=ref_pdb,
-                    ref_chainid=ref_chainid,
-                    ref_lig_sele_str=ref_lig_sele_str)
-
-    
-
+if __name__ == '__main__':
+    main()

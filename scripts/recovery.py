@@ -1,26 +1,39 @@
+#!/usr/bin/env python
 """
-Run this script with OUT_OF_MEMORY error occurs and then continue using RUN_FULTONMARKET.py
+Recover a FultonMarket simulation after an out-of-memory error.
 
-Provide the path to the replica exchange directory of the simulation you want to recovery ex: /path/to/replica_exchange/SIMNAME_REP
+Truncates the output netCDF and saves numpy checkpoints so that
+run_fulton_market.py can resume from the last good frame.
 """
-import os, sys
+import argparse
+import os
+import random
+import string
+
 import numpy as np
 import netCDF4 as nc
 from openmmtools.multistate import MultiStateReporter
 from FultonMarket.FultonMarketUtils import truncate_ncdf
-import random
-import string
+
 
 def generate_random_string(length=6):
-  characters = string.ascii_letters + string.digits
-  return ''.join(random.choice(characters) for _ in range(length))
+    characters = string.ascii_letters + string.digits
+    return ''.join(random.choice(characters) for _ in range(length))
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Recover a FultonMarket simulation after an out-of-memory error.'
+    )
+    parser.add_argument('output_dir', type=str,
+                        help='Path to the replica exchange directory '
+                             '(e.g. /path/to/replica_exchange/SIMNAME_REP)')
+    args = parser.parse_args()
+
     random_string = generate_random_string()
 
     # Set output directory
-    output_dir = sys.argv[1]
+    output_dir = args.output_dir
     save_dir = os.path.join(output_dir, 'saved_variables')
     sub_sim_save_dir = os.path.join(save_dir, str(len(os.listdir(save_dir))-1))
 

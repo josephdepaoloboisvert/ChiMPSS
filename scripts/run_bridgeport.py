@@ -1,23 +1,32 @@
-"""
-Simple python script to run Bridgeport job
+#!/usr/bin/env python
+"""Run a Bridgeport system construction job from an input JSON file."""
 
-Positional arguments
-   [1] String path to input.json file. 
-"""
-
-#Imports
-from Bridgeport.Bridgeport import Bridgeport
-import os, sys
+import argparse
+import os
 from datetime import datetime
 
-# Assert that provided .json file is valid
-json_path = sys.argv[1]
-if not os.path.exists(json_path):
-	raise FileNotFoundError(f"Cannot find the input .json file at given location {json_path}.")
 
-# Run Bridgeport
-start_time = datetime.now()
-BP = Bridgeport(input_json=json_path)
-BP.run()
-end_time = datetime.now()
-print('Time to run:', end_time - start_time)
+def main():
+    parser = argparse.ArgumentParser(
+        description='Run a Bridgeport system construction job.'
+    )
+    parser.add_argument('input_json', type=str,
+                        help='Path to Bridgeport input JSON configuration file.')
+    args = parser.parse_args()
+
+    if not os.path.exists(args.input_json):
+        raise FileNotFoundError(
+            f"Cannot find the input JSON file at: {args.input_json}"
+        )
+
+    from Bridgeport.Bridgeport import Bridgeport
+
+    start_time = datetime.now()
+    bp = Bridgeport(input_json=args.input_json)
+    bp.run()
+    end_time = datetime.now()
+    print(f"Time to run: {end_time - start_time}")
+
+
+if __name__ == '__main__':
+    main()
