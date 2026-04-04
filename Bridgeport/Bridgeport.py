@@ -2,7 +2,6 @@ import json
 import os
 import pathlib
 import shutil
-import sys
 
 from copy import deepcopy
 from datetime import datetime
@@ -19,15 +18,14 @@ from pdbfixer import PDBFixer
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from utils.protein_preparer import ProteinPreparer
-from RepairProtein.repair_protein import RepairProtein
-from ForceFields.force_fields import ForceFieldHandler
-from ForceFields.joiner import Joiner
-from Ligand.Ligand import Ligand
-from Ligand.Analogue import Analogue
-from Ligand.mutated_peptide import MutatedPeptide
-from Minimizer.Minimizer import Minimizer
+from ..utils.protein_preparer import ProteinPreparer
+from ..RepairProtein.repair_protein import RepairProtein
+from ..ForceFields.force_fields import ForceFieldHandler
+from ..ForceFields.joiner import Joiner
+from ..Ligand.Ligand import Ligand
+from ..Ligand.Analogue import Analogue
+from ..Ligand.mutated_peptide import MutatedPeptide
+from ..Minimizer.Minimizer import Minimizer
 
 class Bridgeport():
     """
