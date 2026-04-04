@@ -6,7 +6,7 @@ Positional arguments
 """
 
 #Imports
-from Bridgeport import Bridgeport
+from Bridgeport.Bridgeport import Bridgeport
 import os, sys
 from datetime import datetime
 

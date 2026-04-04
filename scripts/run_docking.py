@@ -1,6 +1,6 @@
 import os
 import argparse
-from Docking import Docking
+from Docking.Docking import Docking
 from typing import List
 
 # List of integers

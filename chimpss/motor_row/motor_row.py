@@ -13,7 +13,7 @@ from openmm.unit import (kelvin, picosecond, femtosecond, bar, nanometer,
                          joule, angstrom, mole)
 from typing import List
 
-from MotorRow_utils import get_positions_from_pdb, restrain_atoms, unpack_infiles
+from ..common.openmm_utils import get_positions_from_pdb, restrain_atoms, unpack_infiles
 
 class MotorRow():
     """

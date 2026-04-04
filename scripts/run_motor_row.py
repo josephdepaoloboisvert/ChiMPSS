@@ -1,5 +1,5 @@
 import os, sys, glob, argparse
-from MotorRow import MotorRow
+from chimpss.motor_row.motor_row import MotorRow
 parser = argparse.ArgumentParser()
 parser.add_argument('pdb_file', type=str, help='Path to PDB File with starting coordinates (This shipped from Bridgeport)')
 parser.add_argument('system_xml', type=str, help='Path to the XML File with the serialized system (This shipped from Bridgeport)')

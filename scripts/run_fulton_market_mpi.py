@@ -2,15 +2,17 @@
 
 """
 Standalone MPI wrapper for FultonMarket simulations
-Usage: mpirun -np 4 python mpi_fultonmarket_wrapper.py [RUN_FULTONMARKET.py arguments]
-This script requires your original RUN_FULTONMARKET.py to exist in the same directory
+Usage: mpirun -np 4 python run_fulton_market_mpi.py [run_fulton_market.py arguments]
+This script requires run_fulton_market.py to exist in the same directory (scripts/).
 
 Example:
-mpirun -np 4 python RUN_FULTONMARKET_MPI.py /path/to/output 8 /path/to/replica_exchange 0 -t 1000 -s 25 -n 120
+mpirun -np 4 python scripts/run_fulton_market_mpi.py /path/to/output 8 /path/to/replica_exchange 0 -t 1000 -s 25 -n 120
 """
 
 import os
 import sys
+
+_RUN_FM = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'run_fulton_market.py')
 
 def setup_mpi_gpu():
     """Setup MPI and GPU assignment for FultonMarket"""
@@ -89,7 +91,7 @@ def execute_run_fultonmarket():
     """Execute the original RUN_FULTONMARKET.py script"""
     try:
         # Check if RUN_FULTONMARKET.py exists
-        if not os.path.exists('RUN_FULTONMARKET.py'):
+        if not os.path.exists(_RUN_FM):
             raise FileNotFoundError("RUN_FULTONMARKET.py not found in current directory")
         
         # Get current rank for output control
@@ -104,10 +106,10 @@ def execute_run_fultonmarket():
         # Execute the original script using runpy to preserve environment
         # Pass through all command line arguments
         original_argv = sys.argv[1:]  # Get arguments passed to wrapper
-        sys.argv = ['RUN_FULTONMARKET.py'] + original_argv  # Set up argv for the script
+        sys.argv = [_RUN_FM] + original_argv  # Set up argv for the script
         
         import runpy
-        runpy.run_path('RUN_FULTONMARKET.py', run_name='__main__')
+        runpy.run_path(_RUN_FM, run_name='__main__')
         
     except Exception as e:
         print(f"Error executing RUN_FULTONMARKET.py: {e}")
@@ -126,7 +128,7 @@ def main():
     verify_gpu_isolation()
     
     # Brief check for script existence
-    if not os.path.exists('RUN_FULTONMARKET.py'):
+    if not os.path.exists(_RUN_FM):
         print("ERROR: RUN_FULTONMARKET.py not found in current directory")
         sys.exit(1)
     
