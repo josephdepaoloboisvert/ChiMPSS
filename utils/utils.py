@@ -26,8 +26,6 @@ from rdkit.Chem import Draw, AllChem
 from rdkit.Chem.Draw import IPythonConsole
 from rdkit.Chem import rdFMCS
 from rdkit.Chem.Draw import rdDepictor
-rdDepictor.SetPreferCoordGen(True)
-IPythonConsole.drawOptions.minFontSize=20
 from IPython.display import display
 from typing import List
 

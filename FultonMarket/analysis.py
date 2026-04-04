@@ -22,10 +22,6 @@ warnings.filterwarnings('ignore')
 
 from .FultonMarketUtils import *
 
-jax.print_environment_info()
-printf(f"Default JAX backend is {jax.default_backend()}")
-
-
 class FultonMarketAnalysis():
     """
     Simulation analysis for replica exchange trajectories produced by FultonMarket.
@@ -75,6 +71,9 @@ class FultonMarketAnalysis():
                  upper_limit: int = None,
                  remove_harmonic: bool = False,
                  spring_centers: np.ndarray = None):
+
+        jax.print_environment_info()
+        printf(f"Default JAX backend is {jax.default_backend()}")
 
         # Resolve input directory
         self.input_dir = input_dir.rstrip('/')

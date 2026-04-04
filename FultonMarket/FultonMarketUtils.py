@@ -31,9 +31,6 @@ geometric_distribution = lambda min_val, max_val, n_vals: [min_val + (max_val - 
 
 spring_constant_unit = (unit.joule)/(unit.angstrom*unit.angstrom*unit.mole)
 
-rmsd = lambda a, b: np.sqrt(np.mean(np.sum((b-a)**2, axis=-1), axis=-1))
-
-perms = jnp.array([x for x in itertools.product([-1, 0, 1], repeat=3)])
 jaxrmsd = lambda a, b: jnp.sqrt(jnp.mean(jnp.sum((b-a)**2, axis=-1), axis=-1))
 jax_add = lambda a, b: a+b
 jax_add = jax.vmap(jax_add, in_axes=(0, None))
@@ -260,7 +257,6 @@ def calculate_weighted_rc(reduced_cartesian, resampled_inds, upper_limit, pca_we
     return np.mean(mean_weighted_rcs), np.std(mean_weighted_rcs) / np.sqrt(reduced_cartesian.shape[0])
     
 
-@staticmethod
 def resample_with_mbar(objs: List, u_kln: np.array, N_k: np.array, size: int, reshape_weights: tuple=None, specify_state: int=0, return_inds: bool=False, return_weights: bool=False, return_resampled_weights: bool=False, replace: bool=True):
 
     # Get MBAR weights
@@ -312,7 +308,6 @@ def resample_with_mbar(objs: List, u_kln: np.array, N_k: np.array, size: int, re
     return return_list
 
 
-@staticmethod
 def compute_mbar_weights(u_kln, N_k):
     """
     """
@@ -320,7 +315,6 @@ def compute_mbar_weights(u_kln, N_k):
 
     return mbar.weights()
     
-@staticmethod
 def detect_pc_equil(pc, reduced_cartesian):
     t0, _, _ = detect_equilibration(reduced_cartesian[:,pc])
     return t0
@@ -341,6 +335,7 @@ def best_translation_by_unitcell(cell_lengths, mobile_coords, target_coords):
     return translations[np.argmin(rmsds_of_permutations)], rmsds_of_permutations[np.argmin(rmsds_of_permutations)]
     
 def best_translation_by_unitcell_jax(cell_lengths, mobile_coords, target_coords):
+    perms = jnp.array([x for x in itertools.product([-1, 0, 1], repeat=3)])
     translations = cell_lengths * perms
     permuted_positions = jax_add(translations, mobile_coords)
     rmsds_of_permutations = rmsd_j(permuted_positions, target_coords)

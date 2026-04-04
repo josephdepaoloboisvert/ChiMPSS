@@ -336,107 +336,106 @@ def simulate_from_filepair(pdb_top_fn, sys_xml_fn,
         _ = PDBFile.writeFile(sim.topology, sim.context.getState(getPositions=True).getPositions(), file=f, keepIds=True)
     return None
 
-from datetime import datetime
-#import jax
-#import jax.numpy as jnp
+if __name__ == '__main__':
+    from datetime import datetime
 
-pdb_fn = 'Static_Env/MotorRowBenchMark/Step_5_wrapped.pdb'
-#ligand_smiles = "CCN(CC)C(=O)N[C@@H]1CN([C@@H]2Cc3c[nH]c4c3c(ccc4)C2=C1)C"
-ligand_smiles = "[H][C@]1(C[C@@H]2[C@H]3C(=C[C@]4(CCCC[C@@]24[H])O[C@@]13C)C1=NCCO1)C1=CC=CC(C)=N1"
-pdb = PDBFile(pdb_fn)
-u = mda.Universe(pdb_fn)
+    pdb_fn = 'Static_Env/MotorRowBenchMark/Step_5_wrapped.pdb'
+    #ligand_smiles = "CCN(CC)C(=O)N[C@@H]1CN([C@@H]2Cc3c[nH]c4c3c(ccc4)C2=C1)C"
+    ligand_smiles = "[H][C@]1(C[C@@H]2[C@H]3C(=C[C@]4(CCCC[C@@]24[H])O[C@@]13C)C1=NCCO1)C1=CC=CC(C)=N1"
+    pdb = PDBFile(pdb_fn)
+    u = mda.Universe(pdb_fn)
 
-envelope, outside = select_whole_residues(u, 'protein or resname UNK or (around 5 (protein or resname UNK))')
-envelope, outside, envelope.indices.shape, outside.indices.shape
+    envelope, outside = select_whole_residues(u, 'protein or resname UNK or (around 5 (protein or resname UNK))')
+    envelope, outside, envelope.indices.shape, outside.indices.shape
 
-ref_sys, top, pos = parameterize_from_pdb('Static_Env/MotorRowBenchMark/Step_5_wrapped.pdb', lig_smiles=ligand_smiles)
+    ref_sys, top, pos = parameterize_from_pdb('Static_Env/MotorRowBenchMark/Step_5_wrapped.pdb', lig_smiles=ligand_smiles)
 
-print(envelope.positions.max(axis=0), envelope.positions.min(axis=0))
-print(outside.positions.max(axis=0), outside.positions.min(axis=0))
+    print(envelope.positions.max(axis=0), envelope.positions.min(axis=0))
+    print(outside.positions.max(axis=0), outside.positions.min(axis=0))
 
-indices, adj_pos = np.array(outside.indices), np.array(outside.positions) - outside.positions.min(axis=0)
+    indices, adj_pos = np.array(outside.indices), np.array(outside.positions) - outside.positions.min(axis=0)
 
-dim = adj_pos.max(axis=0) - adj_pos.min(axis=0) #size
-spacing = 0.125 #Angstrom desired spacing
-#dim *= 0.1 #Angstrom to nanometer if necessary
-counts = np.ceil(dim/spacing).astype(int)
-spacing = [spacing]*3
+    dim = adj_pos.max(axis=0) - adj_pos.min(axis=0) #size
+    spacing = 0.125 #Angstrom desired spacing
+    #dim *= 0.1 #Angstrom to nanometer if necessary
+    counts = np.ceil(dim/spacing).astype(int)
+    spacing = [spacing]*3
 
-adj_pos.min(axis=0)
+    adj_pos.min(axis=0)
 
-### Coordinates of grid points
-print('Calculating grid coordinates')
-startTime = datetime.now()
+    ### Coordinates of grid points
+    print('Calculating grid coordinates')
+    startTime = datetime.now()
 
-# xyz = get_grid_pos(center, counts, spacing)
-grid = {}
-grid['x'] = np.zeros(shape=tuple(counts), dtype=float)
-grid['y'] = np.zeros(shape=tuple(counts), dtype=float)
-grid['z'] = np.zeros(shape=tuple(counts), dtype=float)
-for i in range(counts[0]):
-    if i % (counts[0]//10) == 0:
-        print(i)
-    
-    for j in range(counts[1]):
-        for k in range(counts[2]):
-            grid['x'][i,j,k] = i*spacing[0]
-            grid['y'][i,j,k] = j*spacing[1]
-            grid['z'][i,j,k] = k*spacing[2]
+    # xyz = get_grid_pos(center, counts, spacing)
+    grid = {}
+    grid['x'] = np.zeros(shape=tuple(counts), dtype=float)
+    grid['y'] = np.zeros(shape=tuple(counts), dtype=float)
+    grid['z'] = np.zeros(shape=tuple(counts), dtype=float)
+    for i in range(counts[0]):
+        if i % (counts[0]//10) == 0:
+            print(i)
 
-# for key in ['x', 'y', 'z']:
-#    grid[key] = jnp.array(grid[key])
+        for j in range(counts[1]):
+            for k in range(counts[2]):
+                grid['x'][i,j,k] = i*spacing[0]
+                grid['y'][i,j,k] = j*spacing[1]
+                grid['z'][i,j,k] = k*spacing[2]
 
-endTime = datetime.now()
-print(f' in {endTime-startTime}')
+    # for key in ['x', 'y', 'z']:
+    #    grid[key] = jnp.array(grid[key])
 
-#These points are however relative to the origin...
+    endTime = datetime.now()
+    print(f' in {endTime-startTime}')
 
-n_points = np.prod(counts)
-n_atoms = indices.shape[0]
+    #These points are however relative to the origin...
 
-nbf = [force for force in ref_sys.getForces() if type(force) == NonbondedForce][0]
-startTime = datetime.now()
-print("Reading Parameters for Grid Particles")
-charges = np.zeros(n_atoms) #elementary charge
-depths = np.zeros(n_atoms) #OpenMM = kJ/mol convert to AMBER kcal/mol
-radii = np.zeros(n_atoms) #OpenMM = nm convert to AMBER Angstrom
-for i, atom_index in enumerate(indices):
-    q, r, e = nbf.getParticleParameters(atom_index)
-    charges[i] = q.value_in_unit(elementary_charge)
-    depths[i] = e.value_in_unit(kilocalorie_per_mole)
-    radii[i] = r.value_in_unit(angstrom)
+    n_points = np.prod(counts)
+    n_atoms = indices.shape[0]
 
-root_depths = np.sqrt(depths)
-diameters = 2*radii
+    nbf = [force for force in ref_sys.getForces() if type(force) == NonbondedForce][0]
+    startTime = datetime.now()
+    print("Reading Parameters for Grid Particles")
+    charges = np.zeros(n_atoms) #elementary charge
+    depths = np.zeros(n_atoms) #OpenMM = kJ/mol convert to AMBER kcal/mol
+    radii = np.zeros(n_atoms) #OpenMM = nm convert to AMBER Angstrom
+    for i, atom_index in enumerate(indices):
+        q, r, e = nbf.getParticleParameters(atom_index)
+        charges[i] = q.value_in_unit(elementary_charge)
+        depths[i] = e.value_in_unit(kilocalorie_per_mole)
+        radii[i] = r.value_in_unit(angstrom)
 
-endTime = datetime.now()
-print(f' in {endTime-startTime}')
+    root_depths = np.sqrt(depths)
+    diameters = 2*radii
 
-points = np.array([grid['x'].flatten(), grid['y'].flatten(), grid['z'].flatten()]).T
+    endTime = datetime.now()
+    print(f' in {endTime-startTime}')
 
-print('Calculating Grid Potentials')
-startTime = datetime.now()
+    points = np.array([grid['x'].flatten(), grid['y'].flatten(), grid['z'].flatten()]).T
 
-coulomb_flat = np.zeros(points.shape[0])
-ljr_flat = np.zeros(points.shape[0])
-lja_flat = np.zeros(points.shape[0])
+    print('Calculating Grid Potentials')
+    startTime = datetime.now()
 
-def distance_all_to_point(p):
-    return np.sqrt(np.sum((adj_pos - p)**2, axis=-1))
+    coulomb_flat = np.zeros(points.shape[0])
+    ljr_flat = np.zeros(points.shape[0])
+    lja_flat = np.zeros(points.shape[0])
 
-def assign_grid_point(i):
-    p = points[i]
-    dist = distance_all_to_point(p)
-    coulomb_flat[i] = np.sum(332.06*charges/dist)
-    ljr_flat[i] = np.sum(root_depths*(diameters**6)/(dist**12))
-    lja_flat[i] = np.sum(-2*root_depths*(diameters**3)/(dist**6))
+    def distance_all_to_point(p):
+        return np.sqrt(np.sum((adj_pos - p)**2, axis=-1))
 
-with mp.Pool(processes=mp.cpu_count()) as pool:
-    _ = pool.map(assign_grid_point, np.arange(points.shape[0]), chunksize=10000)
+    def assign_grid_point(i):
+        p = points[i]
+        dist = distance_all_to_point(p)
+        coulomb_flat[i] = np.sum(332.06*charges/dist)
+        ljr_flat[i] = np.sum(root_depths*(diameters**6)/(dist**12))
+        lja_flat[i] = np.sum(-2*root_depths*(diameters**3)/(dist**6))
 
-endTime = datetime.now()
-print(f' in {endTime-startTime}')
+    with mp.Pool(processes=mp.cpu_count()) as pool:
+        _ = pool.map(assign_grid_point, np.arange(points.shape[0]), chunksize=10000)
 
-np.save('test_coulomb.npy', coulomb_flat)
-np.save('test_ljr.npy', ljr_flat)
-np.save('test_lja.npy', lja_flat)
+    endTime = datetime.now()
+    print(f' in {endTime-startTime}')
+
+    np.save('test_coulomb.npy', coulomb_flat)
+    np.save('test_ljr.npy', ljr_flat)
+    np.save('test_lja.npy', lja_flat)
