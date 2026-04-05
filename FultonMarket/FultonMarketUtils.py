@@ -270,7 +270,7 @@ def calculate_weighted_rc(reduced_cartesian, resampled_inds, upper_limit, pca_we
     
 
 @staticmethod
-def resample_with_MBAR(objs: List, u_kln: np.array, N_k: np.array, size: int, reshape_weights: tuple=None, specify_state: int=0, return_inds: bool=False, return_weights: bool=False, return_resampled_weights: bool=False, replace: bool=True):
+def resample_with_MBAR(objs: List, u_kln: np.array, N_k: np.array, size: int, reshape_weights: tuple=None, specify_state: int=0, return_inds: bool=False, return_weights: bool=False, return_resampled_weights: bool=False, replace: bool=True, _printf=None):
 
     # Get MBAR weights
     weights = compute_MBAR_weights(u_kln, N_k)
@@ -286,10 +286,11 @@ def resample_with_MBAR(objs: List, u_kln: np.array, N_k: np.array, size: int, re
         probs = weights[:, specify_state]
 
 
+    _log = _printf if _printf is not None else printf
     # Resample
     if size == -1:
         resampled_inds = np.where(probs >= probs.max()*0.001)[0]
-        printf(f'Top 99.9% of probability includes {len(resampled_inds)} no. of frames')
+        _log(f'Top 99.9% of probability includes {len(resampled_inds)} no. of frames')
     else:
         probs /= np.nan_to_num(probs).sum() # Renormalize to avoid errors
         probs = np.nan_to_num(probs)
@@ -408,7 +409,7 @@ def getAlphaCarbonDistanceMatrix(traj, selection_string=None):
     return distance_matrix
 
 
-def getContactDistanceMatrix(top_fn, traj_fn, output_fn, conda_env=None, getcontacts_script=None, getcontacts_python=None, cores: int = 10):
+def getContactDistanceMatrix(top_fn, traj_fn, output_fn, conda_env=None, getcontacts_script=None, getcontacts_python=None, cores: int = 10, _printf=None):
     """
     Run getContacts in a specified conda environment and compute a frame x frame
     contact distance matrix.
@@ -454,8 +455,9 @@ def getContactDistanceMatrix(top_fn, traj_fn, output_fn, conda_env=None, getcont
                 "CONDA_PREFIX is not set and getcontacts_python was not provided. "
                 "Provide getcontacts_python explicitly via getContacts_Info."
             )
+        _log = _printf if _printf is not None else printf
         current_env = os.path.basename(conda_prefix)
-        printf(f"Detected current conda env: '{current_env}' — switching to: '{conda_env}'")
+        _log(f"Detected current conda env: '{current_env}' — switching to: '{conda_env}'")
         conda_python = os.path.join(conda_prefix.replace(current_env, conda_env), 'bin', 'python')
         if not os.path.exists(conda_python):
             raise RuntimeError(
@@ -476,7 +478,8 @@ def getContactDistanceMatrix(top_fn, traj_fn, output_fn, conda_env=None, getcont
            '--stride', '1']   
     
     #Run these on da line
-    printf(f"Running Process: {'\n\t'.join(cmd)}")
+    _log = _printf if _printf is not None else printf
+    _log(f"Running Process: {'\n\t'.join(cmd)}")
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         print("STDOUT:\n", result.stdout)

@@ -120,12 +120,13 @@ def load_matrices(src_sim_dir: str, cache_sim_dir: Optional[str]) -> dict:
     return matrices
 
 
-def save_matrices(matrices: dict, write_dir: str, sim_no: int):
+def save_matrices(matrices: dict, write_dir: str, sim_no: int, _printf=None):
     """Save distance matrices to write_dir."""
+    _log = _printf if _printf is not None else printf
     for name, matrix in matrices.items():
         out_path = os.path.join(write_dir, f'resampled_{name}_matrix.npy')
         np.save(out_path, matrix)
-        printf(f'sim_no={sim_no}: saved {name} matrix -> {out_path}')
+        _log(f'sim_no={sim_no}: saved {name} matrix -> {out_path}')
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +141,7 @@ def compute_distance_matrices(
     getcontacts_script: str = None,
     conda_env: str = None,
     getcontacts_python: str = None,
+    _printf=None,
 ) -> dict:
     """
     Compute torsional, alpha-carbon, and contact distance matrices from a
@@ -161,6 +163,7 @@ def compute_distance_matrices(
     if getcontacts_script  is not None: contact_kwargs['getcontacts_script']  = getcontacts_script
     if conda_env           is not None: contact_kwargs['conda_env']           = conda_env
     if getcontacts_python  is not None: contact_kwargs['getcontacts_python']  = getcontacts_python
+    if _printf             is not None: contact_kwargs['_printf']             = _printf
 
     contact_distance, _ = getContactDistanceMatrix(**contact_kwargs)
 
@@ -251,6 +254,7 @@ def print_sim_report(
     equil_fraction: float,
     effective_post_equil: float,
     first_valid_sim_no: int,
+    _printf=None,
 ):
     progress_pct  = 100.0 * (sim_no + 1) / total_n_sims
     equil_pct     = 100.0 * equil_fraction
@@ -261,29 +265,30 @@ def print_sim_report(
     def _pct(k):
         return f'{100.0 * (k + 1) / total_n_sims:.1f}%'
 
+    _log = _printf if _printf is not None else printf
     width = max(len(label) for label in checks)
     sep   = '=' * (width + 12)
-    printf(sep)
-    printf(f"  Convergence Report — {progress_pct:.1f}% of simulation complete  (sim_no={sim_no})")
-    printf(sep)
+    _log(sep)
+    _log(f"  Convergence Report — {progress_pct:.1f}% of simulation complete  (sim_no={sim_no})")
+    _log(sep)
     for label, result in checks.items():
-        printf(f"  [{'PASS' if result else 'FAIL'}]  {label:<{width}}")
-    printf('-' * (width + 12))
-    printf(f"  Equilibration discards {equil_pct:.1f}% of data, "
-           f"post-equil window covers {post_equil_pct:.1f}%, "
-           f"comparing vs checkpoints from {first_valid_pct:.1f}%..{progress_pct:.1f}% of simulation")
+        _log(f"  [{'PASS' if result else 'FAIL'}]  {label:<{width}}")
+    _log('-' * (width + 12))
+    _log(f"  Equilibration discards {equil_pct:.1f}% of data, "
+         f"post-equil window covers {post_equil_pct:.1f}%, "
+         f"comparing vs checkpoints from {first_valid_pct:.1f}%..{progress_pct:.1f}% of simulation")
     for name in MATRIX_NAMES:
         frob = frob_results[name]
         jsd  = jsd_results[name]
         if frob:
-            printf(f"  {name:>12} Frobenius: {'  '.join(f'vs {_pct(k)}: {v:.4f}' for k, v in sorted(frob.items()))}  (thresh={frobenius_thresh})")
-            printf(f"  {name:>12}       JSD: {'  '.join(f'vs {_pct(k)}: {v:.4f}' for k, v in sorted(jsd.items()))}  (thresh={jsd_thresh})")
+            _log(f"  {name:>12} Frobenius: {'  '.join(f'vs {_pct(k)}: {v:.4f}' for k, v in sorted(frob.items()))}  (thresh={frobenius_thresh})")
+            _log(f"  {name:>12}       JSD: {'  '.join(f'vs {_pct(k)}: {v:.4f}' for k, v in sorted(jsd.items()))}  (thresh={jsd_thresh})")
         else:
-            printf(f"  {name:>12}: no valid previous checkpoints in post-equil window")
-    printf(sep)
+            _log(f"  {name:>12}: no valid previous checkpoints in post-equil window")
+    _log(sep)
 
 
-def print_summary_table(report: Dict[int, Dict[str, bool]], total_n_sims: int):
+def print_summary_table(report: Dict[int, Dict[str, bool]], total_n_sims: int, _printf=None):
     """
     Print a compact summary table of all checks as a function of simulation
     progress. Columns are labelled by percentage of total simulation complete
@@ -302,24 +307,26 @@ def print_summary_table(report: Dict[int, Dict[str, bool]], total_n_sims: int):
     # Column headers as percentage of total simulation
     headers = [f'{100.0 * (s + 1) / total_n_sims:.0f}%' for s in sim_nos]
 
-    printf('\n' + sep)
-    printf("  Summary Table — checks as a function of simulation progress")
-    printf(sep)
-    printf(f"  {'Check':<{col_width}}" + ''.join(f'{h:>{sim_width}}' for h in headers))
-    printf('-' * (col_width + sim_width * len(sim_nos) + 4))
+    _log = _printf if _printf is not None else printf
+    _log('\n' + sep)
+    _log("  Summary Table — checks as a function of simulation progress")
+    _log(sep)
+    _log(f"  {'Check':<{col_width}}" + ''.join(f'{h:>{sim_width}}' for h in headers))
+    _log('-' * (col_width + sim_width * len(sim_nos) + 4))
     for label in all_labels:
         row = f"  {label:<{col_width}}"
         for sim_no in sim_nos:
             result = report[sim_no].get(label)
             row += f"{'PASS':>{sim_width}}" if result else f"{'FAIL':>{sim_width}}"
-        printf(row)
-    printf(sep)
+        _log(row)
+    _log(sep)
 
 
-def log_mode(read_only: bool, output_cache_dir: Optional[str]):
+def log_mode(read_only: bool, output_cache_dir: Optional[str], _printf=None):
+    _log = _printf if _printf is not None else printf
     if read_only:
-        printf('Mode: read-only (in-memory only, nothing written)')
+        _log('Mode: read-only (in-memory only, nothing written)')
     elif output_cache_dir:
-        printf(f'Mode: cache directory (writes -> {output_cache_dir})')
+        _log(f'Mode: cache directory (writes -> {output_cache_dir})')
     else:
-        printf('Mode: normal (reads and writes inside output_dir)')
+        _log('Mode: normal (reads and writes inside output_dir)')

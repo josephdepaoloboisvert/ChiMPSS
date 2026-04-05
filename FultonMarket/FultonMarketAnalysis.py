@@ -350,7 +350,8 @@ class FultonMarketAnalysis():
                                                                                        return_weights=True,
                                                                                        return_resampled_weights=True,
                                                                                        specify_state=specify_state,
-                                                                                       replace=replace)
+                                                                                       replace=replace,
+                                                                                       _printf=self._printf)
         
     def reshape_weights(self):
         """
@@ -1040,7 +1041,7 @@ class FultonMarketAnalysis():
             self._printf(f'WARNING: sim_nos not found, skipping: {sorted(skipped)}', level='minimal')
         targets = [t for t in targets if t in available]
 
-        log_mode(read_only, output_cache_dir)
+        log_mode(read_only, output_cache_dir, _printf=self._printf)
         self._printf(f'retro_analyze_all: processing {len(targets)} sub-simulations: {targets}', level='all')
 
         # Snapshot of full energies/map — temporarily sliced per sim_no
@@ -1109,10 +1110,11 @@ class FultonMarketAnalysis():
                     getcontacts_script=getcontacts_script,
                     conda_env=conda_env,
                     getcontacts_python=getcontacts_python,
+                    _printf=self._printf,
                 )
 
                 if not read_only:
-                    save_matrices(matrices, write_sim_dir or src_sim_dir, sim_no)
+                    save_matrices(matrices, write_sim_dir or src_sim_dir, sim_no, _printf=self._printf)
                 else:
                     self._printf(f'sim_no={sim_no}: read_only=True — matrices in memory only', level='all')
 
@@ -1234,7 +1236,7 @@ class FultonMarketAnalysis():
         targets      = sim_nos if sim_nos is not None else available
         targets      = [t for t in targets if t in available]
 
-        log_mode(read_only, output_cache_dir)
+        log_mode(read_only, output_cache_dir, _printf=self._printf)
         self._printf(f'retro_convergence_report: {len(targets)} checkpoints, '
                      f'total_n_sims={total_n_sims} '
                      f'({100.0 * len(targets) / total_n_sims:.1f}% of simulation covered), '
@@ -1328,10 +1330,11 @@ class FultonMarketAnalysis():
                         getcontacts_script=getcontacts_script,
                         conda_env=conda_env,
                         getcontacts_python=getcontacts_python,
+                        _printf=self._printf,
                     )
 
                     if not read_only:
-                        save_matrices(matrices, write_sim_dir or src_sim_dir, sim_no)
+                        save_matrices(matrices, write_sim_dir or src_sim_dir, sim_no, _printf=self._printf)
 
                     matrix_cache[sim_no] = matrices
 
@@ -1369,6 +1372,7 @@ class FultonMarketAnalysis():
                     equil_fraction=equil_fraction,
                     effective_post_equil=effective_post_equil,
                     first_valid_sim_no=first_valid_sim_no,
+                    _printf=self._printf,
                 )
 
                 report[sim_no] = checks
@@ -1406,5 +1410,5 @@ class FultonMarketAnalysis():
             if hasattr(self, attr):
                 delattr(self, attr)
 
-        print_summary_table(report, total_n_sims)
+        print_summary_table(report, total_n_sims, _printf=self._printf)
         return report, metrics
