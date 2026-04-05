@@ -16,7 +16,7 @@ from pymbar.timeseries import detect_equilibration
 import scipy.constants as cons
 import seaborn as sns
 from sklearn.decomposition import PCA
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import warnings
 warnings.filterwarnings('ignore')
 
