@@ -63,6 +63,10 @@ class FultonMarketAnalysis():
         energies. Requires ``spring_centers``. Default False.
     spring_centers : np.ndarray, optional
         Spring centres required when ``remove_harmonic=True``.
+    verbosity : str
+        Controls how much is printed. ``'none'`` suppresses all output,
+        ``'minimal'`` prints key milestones and errors (default),
+        ``'all'`` prints everything.
     """
 
     def __init__(self,
@@ -74,13 +78,19 @@ class FultonMarketAnalysis():
                  sele_str: str = None,
                  upper_limit: int = None,
                  remove_harmonic: bool = False,
-                 spring_centers: np.ndarray = None):
+                 spring_centers: np.ndarray = None,
+                 verbosity: str = 'minimal'):
+
+        # Verbosity: 'none' | 'minimal' | 'all'
+        assert verbosity in ('none', 'minimal', 'all'), \
+            f"verbosity must be 'none', 'minimal', or 'all'; got {verbosity!r}"
+        self.verbosity = verbosity
 
         # Resolve input directory
         self.input_dir = input_dir.rstrip('/')
         self.stor_dir = os.path.join(self.input_dir, 'saved_variables')
         assert os.path.isdir(self.stor_dir), self.stor_dir
-        printf(f'Found storage directory at {self.stor_dir}')
+        self._printf(f'Found storage directory at {self.stor_dir}', level='minimal')
         self.storage_dirs = sorted(glob.glob(self.stor_dir + '/*'),
                                    key=lambda x: int(x.split('/')[-1]))
         # Topology
@@ -92,14 +102,14 @@ class FultonMarketAnalysis():
         else:
             self.resSeqs = None
         self.sele_str = sele_str
-        printf(f'Ligand selection string: {sele_str}')
+        self._printf(f'Ligand selection string: {sele_str}', level='all')
         # Load saved variables (memory-mapped)
         self.skip = skip
         self.scheduling = scheduling
         self.temperatures_list = [np.round(np.load(os.path.join(d, 'temperatures.npy'), mmap_mode='r'), decimals=2)
                                   for d in self.storage_dirs]
         self.temperatures = self.temperatures_list[-1]
-        printf(f'Temperature array shapes: {[(i, t.shape) for i, t in enumerate(self.temperatures_list)]}')
+        self._printf(f'Temperature array shapes: {[(i, t.shape) for i, t in enumerate(self.temperatures_list)]}', level='all')
         
         self.state_inds = [np.load(os.path.join(d, 'states.npy'), mmap_mode='r')[skip:] for d in self.storage_dirs]
         self.unshaped_energies = [np.load(os.path.join(d, 'energies.npy'), mmap_mode='r')[skip:]
@@ -118,8 +128,19 @@ class FultonMarketAnalysis():
             self.energies = self.energies[:upper_limit + 1]
             self.map = self.map[:upper_limit + 1]
             self.upper_limit = upper_limit
-        printf(f'Final energy matrix shape: {self.energies.shape}')
-    
+        self._printf(f'Final energy matrix shape: {self.energies.shape}', level='minimal')
+
+    def _printf(self, msg: str, level: str = 'all') -> None:
+        """Print msg according to self.verbosity.
+
+        level='minimal' — shown for verbosity 'minimal' or 'all'
+        level='all'     — shown only for verbosity 'all'
+        """
+        if self.verbosity == 'none':
+            return
+        if level == 'minimal' or self.verbosity == 'all':
+            printf(msg)
+
     # ------------------------------------------------------------------
     # Energy access and plotting
     # ------------------------------------------------------------------
@@ -438,7 +459,7 @@ class FultonMarketAnalysis():
 
         for i, (state, frame) in enumerate(self.resampled_inds):
             if i % max(1, n // 10) == 0:
-                printf(f'{100 * i / n:.1f}% assembled')
+                self._printf(f'{100 * i / n:.1f}% assembled', level='all')
             sim_no, sim_iter, sim_rep_ind = self.map[frame, state].astype(int)
             pos[i]     = np.array(self.positions[sim_no][sim_iter][sim_rep_ind])
             box_vec[i] = np.array(self.box_vectors[sim_no][sim_iter][sim_rep_ind])
@@ -446,15 +467,15 @@ class FultonMarketAnalysis():
         self.traj = write_traj_from_pos_boxvecs(pos, box_vec, self.top, self.sele_str, correction=correction)
         self.traj[0].save_pdb(pdb_out)
         self.traj.save_dcd(dcd_out)
-        printf(f'{self.traj.n_frames} frames written to {pdb_out} and {dcd_out}')
+        self._printf(f'{self.traj.n_frames} frames written to {pdb_out} and {dcd_out}', level='minimal')
 
         if weights_out is not None:
             np.save(weights_out, self.resampled_weights)
-            printf(f'MBAR weights written to {weights_out}')
+            self._printf(f'MBAR weights written to {weights_out}', level='all')
 
         if inds_out is not None:
             np.save(inds_out, self.resampled_inds)
-            printf(f'Resampled indices written to {inds_out}')
+            self._printf(f'Resampled indices written to {inds_out}', level='all')
 
         if return_traj:
             return self.traj
@@ -550,7 +571,7 @@ class FultonMarketAnalysis():
         pca, self.reduced_cartesian, self.explained_variance, self.n_components = get_traj_PCA(
             traj, explained_variance_threshold=explained_variance_threshold
         )
-        printf(f'Reduced Cartesian shape: {self.reduced_cartesian.shape}')
+        self._printf(f'Reduced Cartesian shape: {self.reduced_cartesian.shape}', level='all')
 
 
     def get_weighted_reduced_cartesian(self,
@@ -650,7 +671,7 @@ class FultonMarketAnalysis():
 
             init_shape = self.positions[i].shape
             sim_pos = np.array(self.positions[i][:, :, keep_inds, :])
-            printf(f'Truncated {storage_dir}: {init_shape} → {sim_pos.shape}')
+            self._printf(f'Truncated {storage_dir}: {init_shape} → {sim_pos.shape}', level='all')
 
             pos_fn = os.path.join(storage_dir, 'positions.npy')
             os.remove(pos_fn)
@@ -798,7 +819,7 @@ class FultonMarketAnalysis():
             Total number of frames in the concatenated matrix.
         """
         self._determine_interpolation_inds()
-        printf(f'Detected interpolation indices: {self.interpolation_inds}')
+        self._printf(f'Detected interpolation indices: {self.interpolation_inds}', level='all')
 
         # Identify sub-simulations that sampled the complete ladder
         filled_sim_inds = [
@@ -937,12 +958,12 @@ class FultonMarketAnalysis():
                 f'{storage_dir} has no frames — delete the directory and resume.'
             )
             self.positions.append(pos_i)
-            printf(f'Loaded positions from {storage_dir}: shape {pos_i.shape}')
+            self._printf(f'Loaded positions from {storage_dir}: shape {pos_i.shape}', level='all')
 
             bv_path = os.path.join(storage_dir, 'box_vectors.npy')
             bv_i = np.load(bv_path, mmap_mode='r')[skip:]
             self.box_vectors.append(bv_i)
-            printf(f'Loaded box vectors from {storage_dir}: shape {bv_i.shape}')
+            self._printf(f'Loaded box vectors from {storage_dir}: shape {bv_i.shape}', level='all')
 
 
 
@@ -1016,11 +1037,11 @@ class FultonMarketAnalysis():
         targets   = sim_nos if sim_nos is not None else available
         skipped   = set(targets) - set(available)
         if skipped:
-            printf(f'WARNING: sim_nos not found, skipping: {sorted(skipped)}')
+            self._printf(f'WARNING: sim_nos not found, skipping: {sorted(skipped)}', level='minimal')
         targets = [t for t in targets if t in available]
 
         log_mode(read_only, output_cache_dir)
-        printf(f'retro_analyze_all: processing {len(targets)} sub-simulations: {targets}')
+        self._printf(f'retro_analyze_all: processing {len(targets)} sub-simulations: {targets}', level='all')
 
         # Snapshot of full energies/map — temporarily sliced per sim_no
         full_energies = self.energies
@@ -1038,11 +1059,11 @@ class FultonMarketAnalysis():
                 cache_sim_dir = resolve_cache_dir(output_cache_dir, sim_no)
                 existing = load_matrices(src_sim_dir, cache_sim_dir)
                 if len(existing) == 3 and not overwrite:
-                    printf(f'sim_no={sim_no}: all matrices present, skipping')
+                    self._printf(f'sim_no={sim_no}: all matrices present, skipping', level='all')
                     all_matrices[sim_no] = existing
                     continue
 
-                printf(f'sim_no={sim_no}: computing matrices')
+                self._printf(f'sim_no={sim_no}: computing matrices', level='minimal')
 
                 # Restrict energy matrix and map to frames up to this sim_no
                 upper = int(np.sum(frame_counts[:sim_no + 1])) - 1
@@ -1093,12 +1114,12 @@ class FultonMarketAnalysis():
                 if not read_only:
                     save_matrices(matrices, write_sim_dir or src_sim_dir, sim_no)
                 else:
-                    printf(f'sim_no={sim_no}: read_only=True — matrices in memory only')
+                    self._printf(f'sim_no={sim_no}: read_only=True — matrices in memory only', level='all')
 
                 all_matrices[sim_no] = matrices
 
             except Exception as exc:
-                printf(f'ERROR: sim_no={sim_no} failed: {exc}')
+                self._printf(f'ERROR: sim_no={sim_no} failed: {exc}', level='minimal')
                 import traceback; traceback.print_exc()
 
         # Restore full state
@@ -1109,7 +1130,7 @@ class FultonMarketAnalysis():
             if hasattr(self, attr):
                 delattr(self, attr)
 
-        printf(f'retro_analyze_all complete: {len(all_matrices)} / {len(targets)} processed.')
+        self._printf(f'retro_analyze_all complete: {len(all_matrices)} / {len(targets)} processed.', level='minimal')
         return all_matrices
 
 
@@ -1214,10 +1235,11 @@ class FultonMarketAnalysis():
         targets      = [t for t in targets if t in available]
 
         log_mode(read_only, output_cache_dir)
-        printf(f'retro_convergence_report: {len(targets)} checkpoints, '
-               f'total_n_sims={total_n_sims} '
-               f'({100.0 * len(targets) / total_n_sims:.1f}% of simulation covered), '
-               f'frobenius_thresh={frobenius_thresh}, jsd_thresh={jsd_thresh}')
+        self._printf(f'retro_convergence_report: {len(targets)} checkpoints, '
+                     f'total_n_sims={total_n_sims} '
+                     f'({100.0 * len(targets) / total_n_sims:.1f}% of simulation covered), '
+                     f'frobenius_thresh={frobenius_thresh}, jsd_thresh={jsd_thresh}',
+                     level='minimal')
 
         # Snapshot full state — we slice energies/map per sim_no
         full_energies = self.energies
@@ -1234,16 +1256,16 @@ class FultonMarketAnalysis():
             existing      = load_matrices(src_sim_dir, cache_sim_dir)
             if existing:
                 matrix_cache[sim_no] = existing
-                printf(f'sim_no={sim_no} ({100.0*(sim_no+1)/total_n_sims:.1f}%): '
-                       f'pre-loaded {len(existing)} cached matrices from disk')
+                self._printf(f'sim_no={sim_no} ({100.0*(sim_no+1)/total_n_sims:.1f}%): '
+                             f'pre-loaded {len(existing)} cached matrices from disk', level='all')
 
         report  = {}
         metrics = {}
 
         for sim_no in targets:
             progress_pct = 100.0 * (sim_no + 1) / total_n_sims
-            printf(f'\n{"=" * 60}')
-            printf(f'Evaluating checkpoint {progress_pct:.1f}% (sim_no={sim_no})')
+            self._printf(f'\n{"=" * 60}', level='all')
+            self._printf(f'Evaluating checkpoint {progress_pct:.1f}% (sim_no={sim_no})', level='all')
 
             try:
                 src_sim_dir   = self.storage_dirs[sim_no]
@@ -1272,7 +1294,7 @@ class FultonMarketAnalysis():
 
                 # Compute matrices if not already cached
                 if sim_no not in matrix_cache:
-                    printf(f'  computing distance matrices on-the-fly')
+                    self._printf(f'  computing distance matrices on-the-fly', level='all')
 
                     self.importance_resampling(n_samples=n_resample)
 
@@ -1373,7 +1395,7 @@ class FultonMarketAnalysis():
                 }
 
             except Exception as exc:
-                printf(f'ERROR: sim_no={sim_no} failed: {exc}')
+                self._printf(f'ERROR: sim_no={sim_no} failed: {exc}', level='minimal')
                 import traceback; traceback.print_exc()
 
         # Restore full state
