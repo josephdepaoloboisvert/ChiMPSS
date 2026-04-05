@@ -5,7 +5,14 @@
       "Bash(__NEW_LINE_98db1a1743030424__ echo:*)",
       "Bash(__NEW_LINE_c3b5ea401f3efa7e__ echo:*)",
       "Bash(__NEW_LINE_44a0cfdc344dbb43__ echo:*)",
-      "Bash(ls -d c:/Users/josep/CODE/githubs/ChiMPSS/ChiMPSS/*/)"
+      "Bash(ls -d c:/Users/josep/CODE/githubs/ChiMPSS/ChiMPSS/*/)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(ls interactive/*.ipynb)",
+      "Bash(ls DistanceMatrix/*.ipynb)",
+      "Bash(ls Docking/*.ipynb)",
+      "Bash(ls Ligand/*.ipynb)",
+      "Bash(ls HMR_MPI*)"
     ],
     "additionalDirectories": [
       "c:\\Users\\josep\\CODE\\githubs\\ChiMPSS\\ChiMPSS\\chimpss",
