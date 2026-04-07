@@ -142,7 +142,7 @@ def adjust_system(pdb_file: str, xml_file: str):
     mass_after = sum(sys.getParticleMass(i) for i in range(sys.getNumParticles()))
     mass_delta = mass_after - mass_before
 
-    print(f"  Scaled {len(scale_plan)} hydrogen bonds")
+    #print(f"  Scaled {len(scale_plan)} hydrogen bonds")
     print(f"  Mass before: {mass_before:.6f}")
     print(f"  Mass after:  {mass_after:.6f}")
     print(f"  Delta:       {mass_delta:.9f}")
@@ -166,8 +166,5 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    try:
-        adjust_system(args.pdb_file, args.xml_file)
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+    adjust_system(args.pdb_file, args.xml_file)
+    
