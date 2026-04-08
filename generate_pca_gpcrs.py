@@ -15,6 +15,8 @@ Usage examples:
   python generate_pca_gpcrs.py 612_gpcrs.txt
   python generate_pca_gpcrs.py 612_gpcrs.txt --selection backbone --prefix gpcr_pca_bb
   python generate_pca_gpcrs.py 612_gpcrs.txt --threshold 0.80 --workers 24
+  python generate_pca_gpcrs.py 612_gpcrs.txt --bw_positions "1.50,2.50,3.50,4.50,5.50,6.50,7.50"
+  python generate_pca_gpcrs.py 612_gpcrs.txt --bw_positions my_positions.txt
 """
 
 import os
@@ -37,6 +39,40 @@ from gpcr_pca_utils import (
 )
 
 
+def load_bw_positions(spec):
+    """
+    Parse a user-supplied BW position list.
+
+    Args:
+        spec: either a file path (one label per line, or space/comma separated)
+              or an inline string of comma/space-separated labels
+              e.g. "1.50,1.51,2.50" or "1.50 1.51 2.50"
+
+    Returns:
+        list of BW label strings, sorted by helix then position
+
+    Raises:
+        ValueError for malformed labels
+    """
+    from gpcr_pca_utils import _bw_sort_key
+
+    if os.path.exists(spec):
+        with open(spec, 'r') as fh:
+            text = fh.read()
+    else:
+        text = spec
+
+    labels = [tok.strip() for tok in text.replace(',', ' ').split()
+              if tok.strip()]
+
+    bad = [l for l in labels if '.' not in l or len(l.split('.')) != 2]
+    if bad:
+        raise ValueError(
+            f"Malformed BW labels (expected 'H.PP' format): {bad}")
+
+    return sorted(labels, key=_bw_sort_key)
+
+
 def parse_args():
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -57,8 +93,15 @@ def parse_args():
         '--prefix', default='gpcr_pca',
         help='Prefix for all output files (default: gpcr_pca)')
     p.add_argument(
+        '--bw_positions', default=None,
+        help='Explicit BW positions to use, bypassing the conservation filter. '
+             'Accepts a comma/space-separated string ("1.50,1.51,2.50,...") '
+             'or a path to a text file with one label per line. '
+             'When omitted, positions are chosen by --threshold.')
+    p.add_argument(
         '--threshold', type=float, default=0.90,
-        help='BW conservation threshold 0–1 (default: 0.90)')
+        help='BW conservation threshold 0–1; used only when --bw_positions is '
+             'not given (default: 0.90)')
     p.add_argument(
         '--outlier_cutoff', type=float, default=100.0,
         help='Structures with |PC1| > this value (in the initial PCA) are '
@@ -105,10 +148,18 @@ def main():
     bw_assignments = build_bw_assignments(tests)
     print(f"  Assignments built for {len(bw_assignments)} structures")
 
-    conserved_bw = conservation_filter(
-        bw_assignments, n_structures=len(tests), threshold=args.threshold)
-    print(f"  {len(conserved_bw)} BW positions at "
-          f">={args.threshold:.0%} conservation")
+    if args.bw_positions is not None:
+        try:
+            conserved_bw = load_bw_positions(args.bw_positions)
+        except ValueError as exc:
+            sys.exit(f"ERROR in --bw_positions: {exc}")
+        print(f"  Using {len(conserved_bw)} user-specified BW positions "
+              f"(conservation filter bypassed)")
+    else:
+        conserved_bw = conservation_filter(
+            bw_assignments, n_structures=len(tests), threshold=args.threshold)
+        print(f"  {len(conserved_bw)} BW positions at "
+              f">={args.threshold:.0%} conservation")
 
     resids_copopulated = build_resids_copopulated(
         tests, bw_assignments, conserved_bw)
@@ -116,8 +167,10 @@ def main():
           f"conserved positions unambiguously mapped")
 
     if not resids_copopulated:
-        sys.exit("ERROR: no structures survived the BW mapping filter. "
-                 "Try lowering --threshold.")
+        hint = ("Try lowering --threshold."
+                if args.bw_positions is None
+                else "Check that the supplied BW labels exist in this GPCR family.")
+        sys.exit(f"ERROR: no structures survived the BW mapping filter. {hint}")
 
     # ── 5. Atom selection + modal atom-count filter ───────────────────────────
     test_by_code = {t.pdb_code: t for t in tests}
