@@ -226,18 +226,22 @@ def main():
     # ── 8. Final PCA ──────────────────────────────────────────────────────────
     print(f"Running final PCA on {len(selected_clean)} structures...")
     pca = PCA()
-    pca.fit(vectorized_clean)
+    train_projections = pca.fit_transform(vectorized_clean)
     evr = pca.explained_variance_ratio_
     print(f"  PC1 {evr[0]:.1%}  PC2 {evr[1]:.1%}  PC3 {evr[2]:.1%}  "
           f"(cumulative top-3: {evr[:3].sum():.1%})")
 
     # ── 9. Save outputs ───────────────────────────────────────────────────────
-    pca_path  = f"{args.prefix}_pca.joblib"
-    ref_path  = f"{args.prefix}_ref.pdb"
-    meta_path = f"{args.prefix}_meta.json"
+    pca_path   = f"{args.prefix}_pca.joblib"
+    ref_path   = f"{args.prefix}_ref.pdb"
+    meta_path  = f"{args.prefix}_meta.json"
+    proj_path  = f"{args.prefix}_train_projections.npy"
 
     joblib.dump(pca, pca_path)
     print(f"Saved PCA model       → {pca_path}")
+
+    np.save(proj_path, train_projections)
+    print(f"Saved train coords    → {proj_path}")
 
     ref_ag.write(ref_path)
     print(f"Saved reference atoms → {ref_path}")
