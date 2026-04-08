@@ -244,10 +244,27 @@ def _bw_sort_key(label):
         return (999, 999)
 
 
+def is_standard_bw(label):
+    """
+    Return True if label is a well-formed single-helix BW label, e.g. '3.50'.
+
+    Rejects anything with a multi-digit helix number (e.g. '23.50', '45.12')
+    which GPCRdb sometimes returns for non-TM regions or numbering artefacts.
+    """
+    parts = label.split('.')
+    return (len(parts) == 2
+            and len(parts[0]) == 1
+            and parts[0].isdigit()
+            and parts[1].isdigit())
+
+
 def conservation_filter(bw_assignments, n_structures, threshold=0.90):
     """
     Return BW labels present in >= threshold fraction of structures,
     sorted by helix and position.
+
+    Only single-digit helix labels (1.xx – 9.xx) are considered; labels with
+    multi-digit helix numbers (e.g. '23.50') are silently dropped.
 
     Args:
         bw_assignments: output of build_bw_assignments
@@ -260,7 +277,7 @@ def conservation_filter(bw_assignments, n_structures, threshold=0.90):
     counts = {}
     for assignments in bw_assignments.values():
         for label in assignments.values():
-            if label != '-1':
+            if label != '-1' and is_standard_bw(label):
                 counts[label] = counts.get(label, 0) + 1
     conserved = [lbl for lbl, n in counts.items()
                  if n / n_structures >= threshold]

@@ -39,22 +39,20 @@ from gpcr_pca_utils import (
 )
 
 
-def load_bw_positions(spec):
+def _parse_bw_list(spec):
     """
-    Parse a user-supplied BW position list.
+    Parse a BW label list from either a file path or an inline string.
 
-    Args:
-        spec: either a file path (one label per line, or space/comma separated)
-              or an inline string of comma/space-separated labels
-              e.g. "1.50,1.51,2.50" or "1.50 1.51 2.50"
+    Accepts comma and/or space-separated labels.
+    Warns and drops any label with a multi-digit helix number.
 
     Returns:
         list of BW label strings, sorted by helix then position
 
     Raises:
-        ValueError for malformed labels
+        ValueError for labels that do not match 'H.PP' at all
     """
-    from gpcr_pca_utils import _bw_sort_key
+    from gpcr_pca_utils import _bw_sort_key, is_standard_bw
 
     if os.path.exists(spec):
         with open(spec, 'r') as fh:
@@ -70,7 +68,21 @@ def load_bw_positions(spec):
         raise ValueError(
             f"Malformed BW labels (expected 'H.PP' format): {bad}")
 
+    non_standard = [l for l in labels if not is_standard_bw(l)]
+    if non_standard:
+        print(f"  WARNING: dropping {len(non_standard)} non-standard labels "
+              f"(multi-digit helix): {non_standard}")
+    labels = [l for l in labels if is_standard_bw(l)]
+
     return sorted(labels, key=_bw_sort_key)
+
+
+def load_bw_positions(spec):
+    return _parse_bw_list(spec)
+
+
+def load_bw_exclude(spec):
+    return set(_parse_bw_list(spec))
 
 
 def parse_args():
@@ -98,6 +110,11 @@ def parse_args():
              'Accepts a comma/space-separated string ("1.50,1.51,2.50,...") '
              'or a path to a text file with one label per line. '
              'When omitted, positions are chosen by --threshold.')
+    p.add_argument(
+        '--bw_exclude', default=None,
+        help='BW positions to remove from the final list, regardless of how '
+             'it was built (--bw_positions or --threshold). '
+             'Same format as --bw_positions.')
     p.add_argument(
         '--threshold', type=float, default=0.90,
         help='BW conservation threshold 0–1; used only when --bw_positions is '
@@ -160,6 +177,16 @@ def main():
             bw_assignments, n_structures=len(tests), threshold=args.threshold)
         print(f"  {len(conserved_bw)} BW positions at "
               f">={args.threshold:.0%} conservation")
+
+    if args.bw_exclude is not None:
+        try:
+            exclude_set = load_bw_exclude(args.bw_exclude)
+        except ValueError as exc:
+            sys.exit(f"ERROR in --bw_exclude: {exc}")
+        before = len(conserved_bw)
+        conserved_bw = [lbl for lbl in conserved_bw if lbl not in exclude_set]
+        print(f"  Excluded {before - len(conserved_bw)} positions "
+              f"via --bw_exclude  ({len(conserved_bw)} remaining)")
 
     resids_copopulated = build_resids_copopulated(
         tests, bw_assignments, conserved_bw)
