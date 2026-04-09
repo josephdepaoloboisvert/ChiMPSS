@@ -120,6 +120,11 @@ def parse_args():
         help='BW conservation threshold 0–1; used only when --bw_positions is '
              'not given (default: 0.90)')
     p.add_argument(
+        '--species', default='Homo sapiens',
+        help='Only include structures from this species (default: "Homo sapiens"). '
+             'Matched case-insensitively against the GPCRdb "species" field. '
+             'Pass an empty string ("") or "all" to disable the filter.')
+    p.add_argument(
         '--outlier_cutoff', type=float, default=100.0,
         help='Structures with |PC1| > this value (in the initial PCA) are '
              'dropped as outliers before the final PCA (default: 100.0)')
@@ -147,6 +152,21 @@ def main():
     fetch_results = fetch_all_parallel(tests, max_workers=args.workers)
     tests = [t for t in tests if fetch_results.get(t.pdb_code, (False,))[0]]
     print(f"  {len(tests)} / {len(pdb_ids)} structures fetched successfully")
+
+    # ── 2b. Species filter ────────────────────────────────────────────────────
+    species_filter = args.species.strip()
+    if species_filter and species_filter.lower() != 'all':
+        before = len(tests)
+        tests = [
+            t for t in tests
+            if t.meta.get('structure', {}).get('species', '').lower()
+               == species_filter.lower()
+        ]
+        dropped = before - len(tests)
+        print(f"  Species filter '{species_filter}': kept {len(tests)}, "
+              f"dropped {dropped} non-matching structures")
+    else:
+        print(f"  Species filter: disabled")
 
     # ── 3. Load PDB atoms into MDAnalysis ────────────────────────────────────
     print("Loading PDB structures...")
@@ -278,6 +298,14 @@ def main():
         code: test_by_code[code].meta.get('structure', {})
         for code in codes_retained
     }
+
+    # Report state distribution and flag any unexpected labels
+    raw_states = [structure_meta[c].get('state') for c in codes_retained]
+    from collections import Counter
+    state_counts = Counter(str(s) if s is not None else 'None' for s in raw_states)
+    print(f"  State distribution in retained structures:")
+    for state, n in sorted(state_counts.items()):
+        print(f"    {state!r:30s}: {n}")
 
     meta = {
         'selection':     args.selection,

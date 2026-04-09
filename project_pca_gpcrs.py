@@ -375,7 +375,9 @@ def _verbose_training_comparison(projections, meta, prefix):
     train_proj = np.load(train_proj_path)          # (n_train, n_pcs)
     codes      = meta['codes_retained']
     str_meta   = meta.get('structure_meta', {})
-    states     = [str_meta.get(c, {}).get('state', 'Unknown') for c in codes]
+    # Use `or 'Unknown'` so that keys present but set to None (GPCRdb can
+    # return null for state) still fall back to 'Unknown' correctly.
+    states     = [str_meta.get(c, {}).get('state') or 'Unknown' for c in codes]
 
     unique_states = sorted(set(states))
     n_pcs_show    = min(3, projections.shape[1], train_proj.shape[1])
@@ -482,10 +484,58 @@ def main():
         if n_missing > 2:
             lines = "\n".join(f"  [{lbl}] {reason}"
                               for lbl, _, reason in missing_info)
+
+            # ── Diagnose the likely root cause ───────────────────────────────
+            chain_sel = f"chainid {args.chain} and " if args.chain else ""
+            bb_resids = sorted(
+                u.select_atoms(f"{chain_sel}backbone").residues.resids)
+            traj_min, traj_max = (bb_resids[0], bb_resids[-1]) if bb_resids else (None, None)
+
+            # Extract the GPCRdb seqnums that are missing
+            missing_seqnums = []
+            for _, _, reason in missing_info:
+                # reason format: "GPCRdb seqnum NNN → trajectory resid MMM not found..."
+                if 'seqnum' in reason:
+                    try:
+                        missing_seqnums.append(
+                            int(reason.split('seqnum')[1].split('→')[0].strip()))
+                    except (ValueError, IndexError):
+                        pass
+
+            diag = ""
+            if bb_resids and missing_seqnums:
+                missing_min = min(missing_seqnums) + args.resid_offset
+                missing_max = max(missing_seqnums) + args.resid_offset
+                diag = (f"\nDiagnostic:"
+                        f"\n  Trajectory backbone resids : {traj_min}–{traj_max} "
+                        f"({len(bb_resids)} residues)")
+                if missing_min > traj_max:
+                    diag += (
+                        f"\n  Missing resids             : {missing_min}–{missing_max}"
+                        f"\n  → All missing resids are ABOVE the trajectory maximum."
+                        f"\n    The MD topology appears to be C-terminally truncated"
+                        f"\n    (the intracellular ends of TM6/TM7/H8 are absent)."
+                        f"\n    Rebuild the system with a complete receptor sequence,"
+                        f"\n    or retrain the PCA excluding these BW positions.")
+                elif missing_max < traj_min:
+                    diag += (
+                        f"\n  Missing resids             : {missing_min}–{missing_max}"
+                        f"\n  → All missing resids are BELOW the trajectory minimum."
+                        f"\n    The MD topology appears to be N-terminally truncated.")
+                else:
+                    # Gaps inside the trajectory range → likely numbering offset
+                    offset_guess = traj_min - (min(missing_seqnums) if missing_seqnums else traj_min)
+                    diag += (
+                        f"\n  Missing resids             : {missing_min}–{missing_max}"
+                        f"\n  → Missing resids fall within the trajectory resid range."
+                        f"\n    This looks like a residue numbering mismatch."
+                        f"\n    Try --resid_offset {offset_guess:+d}")
+
             raise Exception(
                 f"{n_missing} conserved BW positions are missing from this "
                 f"structure — too many for mean imputation (limit: 2).\n"
-                f"{lines}\n\n"
+                f"{lines}"
+                f"{diag}\n\n"
                 f"Tips:\n"
                 f"  • Exclude these positions with --bw_exclude in "
                 f"generate_pca_gpcrs.py and retrain\n"
