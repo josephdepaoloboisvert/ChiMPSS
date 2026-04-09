@@ -575,6 +575,239 @@ class FultonMarketAnalysis():
         self._printf(f'Reduced Cartesian shape: {self.reduced_cartesian.shape}', level='all')
 
 
+    def project_gpcr_pca(self,
+                         pdb_code: str,
+                         prefix: str,
+                         resampled_dcd: str = None,
+                         resampled_pdb: str = None,
+                         chain: str = None,
+                         resid_offset: int = 0,
+                         stor_dir: str = './many_structures/',
+                         out: str = None) -> np.ndarray:
+        """
+        Project the resampled trajectory onto a pre-computed GPCR PCA space.
+
+        BW numbering for this protein is always fetched fresh from GPCRdb —
+        the protein does not need to be part of the training set.
+
+        The trajectory source is determined as follows:
+          - If ``resampled_dcd`` is provided, that DCD is loaded with
+            ``resampled_pdb`` (or ``self.pdb``) as the topology.
+          - Otherwise ``self.traj`` (the MDTraj resampled trajectory built by
+            ``write_resampled_traj``) is used directly via an in-memory
+            MDAnalysis Universe, avoiding any additional disk I/O.
+
+        Parameters
+        ----------
+        pdb_code : str
+            PDB code of the crystal structure this protein was modelled on.
+            Used only to look up BW numbering via GPCRdb; does not need to be
+            in the PCA training set.
+        prefix : str
+            Shared prefix of the files produced by ``generate_pca_gpcrs.py``
+            (``<prefix>_pca.joblib``, ``<prefix>_ref.pdb``,
+            ``<prefix>_meta.json``).
+        resampled_dcd : str, optional
+            Path to a DCD trajectory to project.  If None, ``self.traj`` must
+            exist (i.e. ``write_resampled_traj`` must have been called first).
+        resampled_pdb : str, optional
+            Topology PDB for ``resampled_dcd``.  Defaults to ``self.pdb``.
+            Ignored when ``resampled_dcd`` is None.
+        chain : str, optional
+            Chain ID of the GPCR in the trajectory.  Omit for single-chain
+            systems.
+        resid_offset : int
+            Added to GPCRdb sequence numbers to obtain resids in the
+            trajectory.  Use when the topology was renumbered relative to
+            UniProt (default 0).
+        stor_dir : str
+            Directory used to cache GPCRdb metadata across calls
+            (default ``'./many_structures/'``).
+        out : str, optional
+            Output ``.npy`` path.  Defaults to
+            ``<pdb_code>_projections.npy`` in the current directory.
+
+        Returns
+        -------
+        projections : np.ndarray of shape (n_frames, n_pcs)
+            Per-frame coordinates in the GPCR PCA space.  Also stored as
+            ``self.gpcr_pca_projections``.
+
+        Raises
+        ------
+        FileNotFoundError
+            If any of the PCA artifact files are missing.
+        RuntimeError
+            If neither ``resampled_dcd`` nor ``self.traj`` is available.
+        Exception
+            If more than 2 conserved BW positions are absent from the
+            trajectory (mean imputation limit exceeded).
+        """
+        import json
+        import tempfile
+        import MDAnalysis as mda
+        from MDAnalysis.coordinates.memory import MemoryReader
+        import joblib
+        import sys
+
+        # Keep project_pca_gpcrs.py and its utilities on the path
+        _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _repo_root not in sys.path:
+            sys.path.insert(0, _repo_root)
+
+        from project_pca_gpcrs import (
+            fetch_bw_map,
+            map_conserved_resids,
+            build_mobile_ag,
+            _imputation_setup,
+            project_trajectory,
+        )
+
+        if out is None:
+            out = f"{pdb_code.upper()}_projections.npy"
+
+        # ── Load PCA artifacts ────────────────────────────────────────────────
+        pca_path  = f"{prefix}_pca.joblib"
+        meta_path = f"{prefix}_meta.json"
+        ref_path  = f"{prefix}_ref.pdb"
+        for path in (pca_path, meta_path, ref_path):
+            if not os.path.exists(path):
+                raise FileNotFoundError(
+                    f"'{path}' not found. "
+                    f"Run generate_pca_gpcrs.py --prefix {prefix} first.")
+
+        pca = joblib.load(pca_path)
+        with open(meta_path, 'r') as fh:
+            meta = json.load(fh)
+
+        selection    = meta['selection']
+        conserved_bw = meta['conserved_bw']
+        expected_n   = meta['n_atoms']
+
+        self._printf(
+            f"GPCR PCA: {pca.n_components_} components, "
+            f"trained on {len(meta['codes_retained'])} structures | "
+            f"selection '{selection}' | expected atoms {expected_n}",
+            level='minimal')
+
+        # ── Load reference AtomGroup for alignment ────────────────────────────
+        ref_u  = mda.Universe(ref_path)
+        ref_ag = ref_u.select_atoms('all')
+        if ref_ag.n_atoms != expected_n:
+            raise ValueError(
+                f"Reference file '{ref_path}' has {ref_ag.n_atoms} atoms "
+                f"but metadata says {expected_n}.  Regenerate the PCA with "
+                f"the same --selection '{selection}'.")
+
+        # ── Fetch BW map ──────────────────────────────────────────────────────
+        os.makedirs(stor_dir, exist_ok=True)
+        self._printf(f"Fetching GPCRdb BW map for {pdb_code.upper()}...",
+                     level='minimal')
+        _, bw_map = fetch_bw_map(pdb_code, stor_dir)
+
+        # ── Build MDAnalysis Universe from the trajectory source ──────────────
+        if resampled_dcd is not None:
+            top_path = resampled_pdb if resampled_pdb is not None else self.pdb
+            u = mda.Universe(top_path, resampled_dcd)
+            self._printf(
+                f"Trajectory: {resampled_dcd} ({len(u.trajectory)} frames)",
+                level='minimal')
+        else:
+            if not hasattr(self, 'traj'):
+                raise RuntimeError(
+                    "No trajectory available: call write_resampled_traj() "
+                    "first, or supply resampled_dcd.")
+            # MDTraj positions are in nm; MDAnalysis expects Angstroms
+            positions_aa = self.traj.xyz * 10.0   # (n_frames, n_atoms, 3)
+            tmp_pdb = tempfile.NamedTemporaryFile(
+                suffix='.pdb', delete=False).name
+            self.traj[0].save_pdb(tmp_pdb)
+            u = mda.Universe(tmp_pdb, positions_aa, format=MemoryReader)
+            os.unlink(tmp_pdb)
+            self._printf(
+                f"Trajectory: self.traj via MemoryReader "
+                f"({len(u.trajectory)} frames)",
+                level='minimal')
+
+        if resid_offset:
+            self._printf(f"Resid offset: {resid_offset:+d}", level='minimal')
+
+        # ── Map conserved BW positions → trajectory resids ───────────────────
+        self._printf("Mapping conserved BW positions to trajectory residues...",
+                     level='all')
+        resids, missing_info = map_conserved_resids(
+            bw_map, conserved_bw, u,
+            chain=chain,
+            resid_offset=resid_offset)
+
+        imputation = None
+        if missing_info:
+            n_missing = len(missing_info)
+            if n_missing > 2:
+                lines = "\n".join(f"  [{lbl}] {reason}"
+                                  for lbl, _, reason in missing_info)
+                raise Exception(
+                    f"{n_missing} conserved BW positions are missing — "
+                    f"too many for mean imputation (limit: 2).\n{lines}\n\n"
+                    f"Retrain with generate_pca_gpcrs.py --bw_exclude "
+                    f"to remove these positions.")
+
+            self._printf(
+                f"WARNING: {n_missing} residue(s) missing — mean-imputed "
+                f"(zero contribution to all PCs):", level='minimal')
+            for lbl, _, reason in missing_info:
+                self._printf(f"  [{lbl}] {reason}", level='minimal')
+
+            imputation = _imputation_setup(
+                missing_info, conserved_bw, expected_n, pca)
+            self._printf(
+                f"  PC1 loading from imputed features: "
+                f"{imputation['pc1_imputed_frac']:.1%} | "
+                f"PC2: {imputation['pc2_imputed_frac']:.1%}",
+                level='minimal')
+            if (imputation['pc1_imputed_frac'] > 0.10
+                    or imputation['pc2_imputed_frac'] > 0.10):
+                self._printf(
+                    "  WARNING: imputed features carry >10% of a PC's "
+                    "loading — interpret projections with caution.",
+                    level='minimal')
+        else:
+            self._printf(
+                f"All {len(conserved_bw)} conserved positions mapped",
+                level='all')
+
+        # ── Select and verify atom count ──────────────────────────────────────
+        mobile_ag = build_mobile_ag(u, resids, selection, chain=chain)
+        expected_mobile = (expected_n if imputation is None
+                           else len(imputation['present_feat_idx']) // 3)
+        if mobile_ag.n_atoms != expected_mobile:
+            raise ValueError(
+                f"Selected {mobile_ag.n_atoms} atoms, expected {expected_mobile}.\n"
+                f"  • Check chain (currently: {chain})\n"
+                f"  • Check that all conserved residues are present\n"
+                f"  • Training selection was '{selection}'")
+        self._printf(
+            f"Selected {mobile_ag.n_atoms} atoms "
+            f"({len(conserved_bw) - len(missing_info)} present"
+            + (f", {len(missing_info)} imputed" if missing_info else "")
+            + ")",
+            level='minimal')
+
+        # ── Project all frames ────────────────────────────────────────────────
+        projections = project_trajectory(u, mobile_ag, ref_ag, pca,
+                                         imputation=imputation)
+
+        np.save(out, projections)
+        self._printf(
+            f"Projections saved → {out}  shape: {projections.shape}\n"
+            f"  PC1 [{projections[:, 0].min():.2f}, {projections[:, 0].max():.2f}]  "
+            f"PC2 [{projections[:, 1].min():.2f}, {projections[:, 1].max():.2f}]",
+            level='minimal')
+
+        self.gpcr_pca_projections = projections
+        return projections
+
+
     def get_weighted_reduced_cartesian(self,
                                         rc_upper_limit: int = None,
                                         return_weighted_rc: bool = False,
