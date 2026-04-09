@@ -80,6 +80,11 @@ def parse_args():
     p.add_argument(
         '--out', default=None,
         help='Output .npy file (default: <pdb_code>_projections.npy)')
+    p.add_argument(
+        '--verbose', '-v', action='store_true',
+        help='Print detailed diagnostics: full BW→resid mapping table, '
+             'per-residue PC loading breakdown, and a comparison of your '
+             'trajectory against training-set Active/Inactive centroids.')
     return p.parse_args()
 
 
@@ -283,6 +288,132 @@ def project_trajectory(u, mobile_ag, ref_ag, pca,
     return pca.transform(vectorized).astype(np.float32)
 
 
+# ── verbose diagnostics ────────────────────────────────────────────────────────
+
+def _verbose_mapping_report(bw_map, conserved_bw, resids, u, chain, resid_offset):
+    """
+    Print a full table of every conserved BW position with its GPCRdb sequence
+    number, trajectory resid, and residue name.  Lets you verify that the right
+    atoms are being selected before projecting.
+    """
+    label_to_seqnum = {lbl: seqnum for seqnum, lbl in bw_map.items()
+                       if lbl != '-1'}
+    chain_sel = f"chainid {chain} and " if chain else ""
+    resid_to_resname = {res.resid: res.resname
+                        for res in u.select_atoms(f"{chain_sel}backbone").residues}
+
+    print("\n── BW Mapping Table ─────────────────────────────────────────────────────")
+    print(f"  {'BW':>8}  {'GPCRdb seq':>10}  {'Traj resid':>10}  {'Resname':>7}  Status")
+    print(f"  {'─'*8}  {'─'*10}  {'─'*10}  {'─'*7}  {'─'*15}")
+
+    for label, resid_list in zip(conserved_bw, resids):
+        seqnum = label_to_seqnum.get(label)
+        if seqnum is None:
+            print(f"  {label:>8}  {'—':>10}  {'—':>10}  {'—':>7}  NOT IN BW MAP")
+            continue
+        traj_resid = seqnum + resid_offset
+        if not resid_list:
+            print(f"  {label:>8}  {seqnum:>10}  {traj_resid:>10}  {'—':>7}  MISSING IN TRAJ")
+            continue
+        resname = resid_to_resname.get(traj_resid, '???')
+        print(f"  {label:>8}  {seqnum:>10}  {traj_resid:>10}  {resname:>7}  ok")
+    print()
+
+
+def _verbose_loadings_report(pca, conserved_bw, expected_n, n_top=10):
+    """
+    For PC1 and PC2, show which BW positions carry the most loading weight.
+    Loading per residue is the RMS over all its xyz features — larger means
+    that residue's position more strongly defines that PC axis.
+
+    Use this to understand what structural changes actually drive the PCA
+    separation you see in the scatter plot.
+    """
+    n_residues    = len(conserved_bw)
+    atoms_per_res = expected_n // n_residues
+    feats_per_res = atoms_per_res * 3
+
+    print("── PC Loading Contributions by BW Position ──────────────────────────────")
+    for pc_idx in range(min(3, pca.n_components_)):
+        comps = pca.components_[pc_idx]
+        rms_per_res = np.array([
+            np.sqrt(np.sum(comps[i * feats_per_res:(i + 1) * feats_per_res] ** 2))
+            for i in range(n_residues)
+        ])
+        top_inds   = np.argsort(rms_per_res)[::-1][:n_top]
+        total_sq   = np.sum(comps ** 2)   # = 1.0 for sklearn PCA
+
+        print(f"\n  PC{pc_idx + 1}  ({pca.explained_variance_ratio_[pc_idx]:.1%} variance)"
+              f"  — top {n_top} positions by RMS loading:")
+        print(f"  {'BW':>8}  {'RMS loading':>11}  {'% of PC norm':>12}")
+        for i in top_inds:
+            frac = rms_per_res[i] ** 2 / total_sq
+            print(f"  {conserved_bw[i]:>8}  {rms_per_res[i]:>11.4f}  {frac:>12.1%}")
+    print()
+
+
+def _verbose_training_comparison(projections, meta, prefix):
+    """
+    Compare the trajectory's mean PC coordinates against the Active and
+    Inactive centroids from the training set.
+
+    Requires <prefix>_train_projections.npy to exist alongside the other
+    PCA artifacts.  If it is absent, a note is printed instead.
+
+    This is the fastest way to understand why a simulation lands where it
+    does in the PCA space — if your Active-ligand simulation falls in the
+    Inactive cloud, the centroid distances tell you how far off it is and
+    which PCs are responsible.
+    """
+    train_proj_path = f"{prefix}_train_projections.npy"
+    if not os.path.exists(train_proj_path):
+        print("── Training-set comparison ──────────────────────────────────────────────")
+        print(f"  (skipped — '{train_proj_path}' not found)")
+        print(f"  Re-run generate_pca_gpcrs.py to produce it.\n")
+        return
+
+    train_proj = np.load(train_proj_path)          # (n_train, n_pcs)
+    codes      = meta['codes_retained']
+    str_meta   = meta.get('structure_meta', {})
+    states     = [str_meta.get(c, {}).get('state', 'Unknown') for c in codes]
+
+    unique_states = sorted(set(states))
+    n_pcs_show    = min(3, projections.shape[1], train_proj.shape[1])
+
+    print("── Training-set state comparison ────────────────────────────────────────")
+    print(f"  {'State':>14}  {'N':>5}  "
+          + "  ".join(f"{'PC'+str(k+1)+' mean':>10}  {'±':>1}  {'std':>6}"
+                      for k in range(n_pcs_show)))
+    print(f"  {'─'*14}  {'─'*5}  " + "  ".join(["─"*20] * n_pcs_show))
+
+    centroids = {}
+    for state in unique_states:
+        mask  = np.array([s == state for s in states])
+        sub   = train_proj[mask, :n_pcs_show]
+        means = sub.mean(axis=0)
+        stds  = sub.std(axis=0)
+        centroids[state] = means
+        pc_cols = "  ".join(f"{means[k]:>10.2f}  ±  {stds[k]:>6.2f}"
+                            for k in range(n_pcs_show))
+        print(f"  {state:>14}  {mask.sum():>5}  {pc_cols}")
+
+    # Your trajectory
+    traj_mean = projections[:, :n_pcs_show].mean(axis=0)
+    traj_std  = projections[:, :n_pcs_show].std(axis=0)
+    pc_cols   = "  ".join(f"{traj_mean[k]:>10.2f}  ±  {traj_std[k]:>6.2f}"
+                          for k in range(n_pcs_show))
+    print(f"  {'YOUR TRAJ':>14}  {len(projections):>5}  {pc_cols}")
+
+    # Euclidean distance from trajectory mean to each state centroid (PC1+PC2)
+    print(f"\n  Euclidean distance from trajectory mean to each state centroid (PC1–PC2):")
+    dists = {state: np.linalg.norm(traj_mean[:2] - cent[:2])
+             for state, cent in centroids.items()}
+    for state, dist in sorted(dists.items(), key=lambda x: x[1]):
+        closest = " ← closest" if dist == min(dists.values()) else ""
+        print(f"    {state:>14}:  {dist:8.2f}{closest}")
+    print()
+
+
 # ── main ───────────────────────────────────────────────────────────────────────
 
 def main():
@@ -381,6 +512,10 @@ def main():
     else:
         print(f"  All {len(conserved_bw)} conserved positions mapped successfully")
 
+    if args.verbose:
+        _verbose_mapping_report(bw_map, conserved_bw, resids, u,
+                                args.chain, args.resid_offset)
+
     # ── Select and verify atom count ──────────────────────────────────────────
     mobile_ag = build_mobile_ag(u, resids, selection, chain=args.chain)
     expected_mobile = expected_n if imputation is None else len(imputation['present_feat_idx']) // 3
@@ -395,6 +530,9 @@ def main():
           + (f", {len(missing_info)} imputed" if missing_info else "")
           + ")")
 
+    if args.verbose:
+        _verbose_loadings_report(pca, conserved_bw, expected_n)
+
     # ── Project all frames ────────────────────────────────────────────────────
     projections = project_trajectory(u, mobile_ag, ref_ag, pca,
                                      imputation=imputation)
@@ -405,6 +543,9 @@ def main():
     print(f"  PC2  [{projections[:, 1].min():.2f}, {projections[:, 1].max():.2f}]")
     if projections.shape[1] > 2:
         print(f"  PC3  [{projections[:, 2].min():.2f}, {projections[:, 2].max():.2f}]")
+
+    if args.verbose:
+        _verbose_training_comparison(projections, meta, args.prefix)
 
 
 if __name__ == '__main__':
