@@ -29,6 +29,144 @@ _THREE2ONE = {
 }
 three_to_one = lambda x: _THREE2ONE.get(x, 'X')
 
+# MD topology resnames that differ from canonical 3-letter codes but represent
+# the same amino acid (protonation variants, CHARMM-specific names, etc.)
+_MD_RESNAME_NORM = {
+    # histidine protonation variants
+    'HID': 'HIS', 'HIE': 'HIS', 'HIP': 'HIS',
+    'HSD': 'HIS', 'HSE': 'HIS', 'HSP': 'HIS',
+    # cysteine
+    'CYX': 'CYS', 'CYM': 'CYS',
+    # protonated ASP / GLU
+    'ASH': 'ASP', 'GLH': 'GLU',
+    # neutral LYS
+    'LYN': 'LYS',
+}
+# residues to skip entirely (capping groups, water, etc.)
+_NON_PROTEIN = {'ACE', 'NME', 'NH2', 'NHE', 'CBT', 'FOR',
+                'WAT', 'HOH', 'TIP', 'SOL', 'NA', 'CL', 'MG', 'ZN'}
+
+
+def _normalize_resname(resname):
+    """Return canonical 3-letter code for common MD resname variants."""
+    return _MD_RESNAME_NORM.get(resname.upper(), resname.upper())
+
+
+# ── sequence utilities for resid-offset auto-detection ───────────────────────
+
+def build_gpcrdb_sequence(naming_info):
+    """
+    Build a sequence dict from GPCRdb naming data.
+
+    Args:
+        naming_info: list of residue dicts from GPCRdb residues/extended endpoint
+                     (stored in Structure_Analyzer.meta['naming'])
+
+    Returns:
+        dict {sequence_number (int): aa_1letter (str)}
+        Residues whose amino_acid field is missing or unknown are omitted.
+    """
+    seq = {}
+    for aa in naming_info:
+        seqnum = aa.get('sequence_number')
+        letter = aa.get('amino_acid', '')
+        if seqnum is not None and letter and letter != 'X':
+            seq[seqnum] = letter.upper()
+    return seq
+
+
+def build_traj_sequence(u, chain=None):
+    """
+    Extract the protein backbone sequence from an MDAnalysis Universe.
+
+    Capping groups and non-protein residues are filtered out.  MD-specific
+    protonation-state resnames (HID, CYX, ASH, …) are normalised to their
+    canonical equivalents before 3→1 conversion.
+
+    Args:
+        u:     MDAnalysis Universe (first frame is used)
+        chain: chain ID string, or None for no chain filter
+
+    Returns:
+        list of (resid, aa_1letter) tuples in residue order,
+        skipping any residue that maps to 'X' after normalisation.
+    """
+    chain_sel = f"chainid {chain} and " if chain else ""
+    residues = u.select_atoms(f"{chain_sel}backbone").residues
+    result = []
+    for res in residues:
+        if res.resname.upper() in _NON_PROTEIN:
+            continue
+        canonical = _normalize_resname(res.resname)
+        letter = _THREE2ONE.get(canonical, 'X')
+        if letter != 'X':
+            result.append((res.resid, letter))
+    return result
+
+
+def sliding_window_align(traj_seq, gpcrdb_seq):
+    """
+    Find the integer offset such that trajectory resids best match GPCRdb
+    sequence numbers, using a sliding-window identity search.
+
+    The trajectory sequence is treated as a contiguous window of the GPCRdb
+    (UniProt) sequence.  For each possible alignment position the fraction of
+    identical residues is computed; the best-scoring position determines the
+    offset.
+
+    Args:
+        traj_seq:    list of (resid, aa_1letter) from build_traj_sequence
+        gpcrdb_seq:  dict {seqnum: aa_1letter} from build_gpcrdb_sequence
+
+    Returns:
+        offset     (int)   : value to add to GPCRdb seqnums to get traj resids
+                             i.e.  traj_resid = GPCRdb_seqnum + offset
+        confidence (float) : fraction of traj residues matched at best position
+        n_matched  (int)   : number of identical residues at best position
+        n_compared (int)   : number of positions compared (= len(traj_seq))
+    """
+    if not traj_seq or not gpcrdb_seq:
+        return 0, 0.0, 0, 0
+
+    seqnums   = sorted(gpcrdb_seq)
+    gpcrdb_aa = [gpcrdb_seq[s] for s in seqnums]
+    traj_aa   = [aa for _, aa in traj_seq]
+    traj_resids = [r for r, _ in traj_seq]
+
+    n_traj = len(traj_aa)
+    n_gpcrdb = len(gpcrdb_aa)
+
+    best_matches = -1
+    best_start   = 0
+
+    # Slide the trajectory window across the GPCRdb sequence.
+    # Allow the window to extend slightly beyond either end (by at most
+    # n_traj//2 positions) so that N- or C-terminally truncated systems
+    # can still align.
+    lo = max(0, -n_traj // 2)
+    hi = n_gpcrdb  # exclusive
+
+    for start in range(lo, hi):
+        matches = 0
+        for ti, ga in enumerate(traj_aa):
+            gi = start + ti
+            if 0 <= gi < n_gpcrdb and ga == gpcrdb_aa[gi]:
+                matches += 1
+        if matches > best_matches:
+            best_matches = matches
+            best_start   = start
+
+    # offset: traj_resid[0] should correspond to gpcrdb_seqnums[best_start]
+    if 0 <= best_start < n_gpcrdb:
+        gpcrdb_start_seqnum = seqnums[best_start]
+    else:
+        gpcrdb_start_seqnum = seqnums[0] + best_start  # extrapolated
+
+    offset     = traj_resids[0] - gpcrdb_start_seqnum
+    confidence = best_matches / n_traj if n_traj > 0 else 0.0
+
+    return offset, confidence, best_matches, n_traj
+
 
 def make_a_request(url, timeout=30):
     return requests.get(url, timeout=timeout).json()

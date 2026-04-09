@@ -33,6 +33,7 @@ import os
 import sys
 import json
 import argparse
+import datetime
 
 import numpy as np
 import MDAnalysis as mda
@@ -42,6 +43,9 @@ import joblib
 from gpcr_pca_utils import (
     Structure_Analyzer,
     naming_from_convention,
+    build_gpcrdb_sequence,
+    build_traj_sequence,
+    sliding_window_align,
 )
 
 
@@ -81,11 +85,101 @@ def parse_args():
         '--out', default=None,
         help='Output .npy file (default: <pdb_code>_projections.npy)')
     p.add_argument(
+        '--no_auto_offset', action='store_true',
+        help='Disable automatic resid-offset detection.  Use this when you '
+             'have already supplied the correct --resid_offset and do not want '
+             'the auto-detection sanity check.')
+    p.add_argument(
         '--verbose', '-v', action='store_true',
         help='Print detailed diagnostics: full BW→resid mapping table, '
              'per-residue PC loading breakdown, and a comparison of your '
              'trajectory against training-set Active/Inactive centroids.')
     return p.parse_args()
+
+
+# ── Auto resid-offset detection ───────────────────────────────────────────────
+
+def auto_detect_resid_offset(u, analyzer, chain=None, user_offset=0):
+    """
+    Attempt to automatically determine the integer offset between GPCRdb
+    sequence numbers and residue IDs in the MD trajectory.
+
+    Uses a sliding-window sequence identity search: the MD backbone sequence
+    is aligned against the full GPCRdb (UniProt) protein sequence and the
+    best-matching position gives the offset.
+
+    Args:
+        u:           MDAnalysis Universe (topology already loaded)
+        analyzer:    Structure_Analyzer with meta['naming'] populated
+        chain:       chain ID string, or None for no chain filter
+        user_offset: the offset the user supplied via --resid_offset (0 = default)
+
+    Returns:
+        offset_to_use (int): the offset that should be applied
+    """
+    naming_info = analyzer.meta.get('naming', [])
+    if not naming_info:
+        print("  Auto-offset: GPCRdb naming data unavailable — skipping.")
+        return user_offset
+
+    gpcrdb_seq = build_gpcrdb_sequence(naming_info)
+    traj_seq   = build_traj_sequence(u, chain=chain)
+
+    if not traj_seq:
+        print("  Auto-offset: no backbone residues found in trajectory — skipping.")
+        return user_offset
+
+    chain_sel   = f"chainid {chain} and " if chain else ""
+    bb_residues = u.select_atoms(f"{chain_sel}backbone").residues
+    traj_min    = int(bb_residues.resids.min())
+    traj_max    = int(bb_residues.resids.max())
+
+    print(f"Auto-detecting resid offset...")
+    print(f"  Trajectory sequence : {len(traj_seq)} residues "
+          f"(resids {traj_min}–{traj_max})")
+    gmin, gmax = min(gpcrdb_seq), max(gpcrdb_seq)
+    print(f"  GPCRdb sequence     : {len(gpcrdb_seq)} residues "
+          f"(seqnums {gmin}–{gmax})")
+
+    detected, confidence, n_matched, n_compared = sliding_window_align(
+        traj_seq, gpcrdb_seq)
+
+    print(f"  Best alignment      : traj resid {traj_seq[0][0]} → "
+          f"GPCRdb seqnum {traj_seq[0][0] - detected}  "
+          f"({confidence:.1%} identity, {n_matched}/{n_compared} matched)")
+
+    # ── Decide what to do based on confidence ────────────────────────────────
+    HIGH  = 0.90
+    LOW   = 0.70
+
+    user_supplied = (user_offset != 0)
+
+    if user_supplied:
+        if detected == user_offset:
+            print(f"  Sanity check        : auto-detected offset {detected:+d} "
+                  f"matches --resid_offset ✓")
+        else:
+            print(f"  WARNING: auto-detected offset ({detected:+d}, "
+                  f"{confidence:.0%} confidence) differs from "
+                  f"--resid_offset {user_offset:+d}.  "
+                  f"Using your supplied value.")
+        return user_offset
+
+    # No explicit user offset — decide whether to apply the detected value.
+    if confidence >= HIGH:
+        print(f"  Applying offset     : {detected:+d}  "
+              f"(confidence {confidence:.1%} — high)")
+        return detected
+    elif confidence >= LOW:
+        print(f"  Applying offset     : {detected:+d}  "
+              f"(confidence {confidence:.1%} — moderate; verify with --verbose)")
+        return detected
+    else:
+        print(f"  WARNING: confidence {confidence:.1%} is too low to apply "
+              f"auto-detected offset {detected:+d} automatically.  "
+              f"Proceeding with offset 0.  "
+              f"Use --resid_offset if numbering is known.")
+        return 0
 
 
 # ── BW → trajectory resid mapping ─────────────────────────────────────────────
@@ -442,6 +536,9 @@ def main():
     conserved_bw = meta['conserved_bw']
     expected_n   = meta['n_atoms']
 
+    pca_mtime = datetime.datetime.fromtimestamp(os.path.getmtime(pca_path))
+    print(f"PCA model : {os.path.abspath(pca_path)}  "
+          f"(modified {pca_mtime.strftime('%Y-%m-%d %H:%M:%S')})")
     print(f"Loaded PCA: {pca.n_components_} components, "
           f"trained on {len(meta['codes_retained'])} structures")
     print(f"Selection : '{selection}'  |  Expected atoms: {expected_n}")
@@ -467,15 +564,24 @@ def main():
     print(f"Universe  : {len(u.trajectory)} frame(s), {u.atoms.n_atoms} atoms")
     if args.chain:
         print(f"Chain     : {args.chain}")
-    if args.resid_offset:
-        print(f"Resid offset: {args.resid_offset:+d}")
+
+    # ── Auto-detect resid offset (unless suppressed) ──────────────────────────
+    if args.no_auto_offset:
+        resid_offset = args.resid_offset
+        if resid_offset:
+            print(f"Resid offset: {resid_offset:+d}  (auto-detection disabled)")
+    else:
+        resid_offset = auto_detect_resid_offset(
+            u, analyzer, chain=args.chain, user_offset=args.resid_offset)
+        if resid_offset:
+            print(f"Resid offset: {resid_offset:+d}")
 
     # ── Map conserved BW positions → trajectory resids ────────────────────────
     print("Mapping conserved BW positions to trajectory residues...")
     resids, missing_info = map_conserved_resids(
         bw_map, conserved_bw, u,
         chain=args.chain,
-        resid_offset=args.resid_offset)
+        resid_offset=resid_offset)
 
     imputation = None
 
@@ -504,8 +610,8 @@ def main():
 
             diag = ""
             if bb_resids and missing_seqnums:
-                missing_min = min(missing_seqnums) + args.resid_offset
-                missing_max = max(missing_seqnums) + args.resid_offset
+                missing_min = min(missing_seqnums) + resid_offset
+                missing_max = max(missing_seqnums) + resid_offset
                 diag = (f"\nDiagnostic:"
                         f"\n  Trajectory backbone resids : {traj_min}–{traj_max} "
                         f"({len(bb_resids)} residues)")
@@ -564,7 +670,7 @@ def main():
 
     if args.verbose:
         _verbose_mapping_report(bw_map, conserved_bw, resids, u,
-                                args.chain, args.resid_offset)
+                                args.chain, resid_offset)
 
     # ── Select and verify atom count ──────────────────────────────────────────
     mobile_ag = build_mobile_ag(u, resids, selection, chain=args.chain)
