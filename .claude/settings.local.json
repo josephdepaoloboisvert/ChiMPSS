@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -c ':*)"
+      "Bash(python -c ':*)",
+      "Bash(grep -E \"\\\\.ipynb$\")",
+      "Bash(grep -E \"^-.*py$\")",
+      "Read(//c/Users/josep/CODE/githubs/ChiMPSS/**)"
     ]
   }
 }
