@@ -39,3 +39,20 @@ pytest tests/unit/test_motorrow/ -v
 # Backward-compat shim check
 python -c "from MotorRow import MotorRow; print('shim OK')"
 echo "Phase 3 OK"
+
+# ── Phase 4: FultonMarket migration ───────────────────────────────────────
+echo "=== Phase 4: FultonMarket ==="
+python -c "from chimpss.fultonmarket import FultonMarket; print('FultonMarket OK:', FultonMarket)"
+python -c "from chimpss.fultonmarket import Randolph; print('Randolph OK:', Randolph)"
+python -c "from chimpss.fultonmarket import FultonMarketAnalysis; print('FultonMarketAnalysis OK:', FultonMarketAnalysis)"
+python -c "from chimpss.fultonmarket import printf, geometric_distribution, build_sampler_states, truncate_ncdf, frobenius_norm, jsd_distance_matrices; print('fultonmarket.utils OK')"
+python -c "from chimpss.fultonmarket.contact_network import ContactNetworkBuilder; print('ContactNetworkBuilder OK')"
+python -c "from chimpss.fultonmarket import retro_convergence; print('retro_convergence OK')"
+pytest tests/unit/test_fultonmarket/ -v
+# Backward-compat shim checks
+python -c "from FultonMarket.FultonMarketwithAnalyzer import FultonMarket; print('shim FultonMarketwithAnalyzer OK')"
+python -c "from FultonMarket.RandolphwithAnalyzer import Randolph; print('shim RandolphwithAnalyzer OK')"
+python -c "from FultonMarket.FultonMarketAnalysis import FultonMarketAnalysis; print('shim FultonMarketAnalysis OK')"
+python -c "from FultonMarket.FultonMarketUtils import truncate_ncdf, frobenius_norm; print('shim FultonMarketUtils OK')"
+python -c "from FultonMarket import FultonMarket, Randolph, FultonMarketAnalysis; print('shim package __init__ OK')"
+echo "Phase 4 OK"
