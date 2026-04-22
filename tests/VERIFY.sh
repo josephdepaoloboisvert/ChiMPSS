@@ -67,3 +67,40 @@ python -c "from chimpss.bridgeport.ligand import Ligand; print('bridgeport.ligan
 # Backward-compat shim check
 python -c "from utils.ProteinPreparer import ProteinPreparer; print('shim utils.ProteinPreparer OK')"
 echo "Phase 5 OK"
+
+# ── Phase 6: Analysis module + CLI entry points ────────────────────────────
+echo "=== Phase 6: analysis module + CLI ==="
+
+# analysis module imports
+python -c "import chimpss.analysis; print('chimpss.analysis importable')"
+python -c "from chimpss.analysis.contacts import ContactNetworkBuilder; print('analysis.contacts OK')"
+python -c "from chimpss.analysis.pdb_fetch import get, fetch_family_proteins, list_families, classify_method; print('analysis.pdb_fetch OK')"
+python -c "from chimpss.analysis.distance_matrix import DistanceMatrix; print('analysis.distance_matrix OK')"
+python -c "from chimpss.analysis.grid_potentials import IO_Grid, select_whole_residues; print('analysis.grid_potentials OK')"
+python -c "from chimpss.analysis.gpcr_pca import Structure_Analyzer, fetch_all_parallel, build_bw_assignments, conservation_filter; print('analysis.gpcr_pca OK')"
+
+# CLI modules importable
+python -c "from chimpss.cli.motorrow import main; print('cli.motorrow OK')"
+python -c "from chimpss.cli.fultonmarket import main; print('cli.fultonmarket OK')"
+python -c "from chimpss.cli.fultonmarket_mpi import main; print('cli.fultonmarket_mpi OK')"
+python -c "from chimpss.cli.retro_analysis import main; print('cli.retro_analysis OK')"
+python -c "from chimpss.cli.recovery import main; print('cli.recovery OK')"
+python -c "from chimpss.cli.fetch_pdbs import main; print('cli.fetch_pdbs OK')"
+python -c "from chimpss.cli.generate_pca import main; print('cli.generate_pca OK')"
+python -c "from chimpss.cli.project_pca import main; print('cli.project_pca OK')"
+
+# Console scripts registered (requires pip install -e .)
+chimpss-motorrow --help         > /dev/null && echo "chimpss-motorrow --help OK"
+chimpss-fultonmarket --help     > /dev/null && echo "chimpss-fultonmarket --help OK"
+chimpss-retro-analysis --help   > /dev/null && echo "chimpss-retro-analysis --help OK"
+chimpss-fetch-pdbs --help       > /dev/null && echo "chimpss-fetch-pdbs --help OK"
+chimpss-generate-pca --help     > /dev/null && echo "chimpss-generate-pca --help OK"
+chimpss-project-pca --help      > /dev/null && echo "chimpss-project-pca --help OK"
+chimpss-recovery --help         > /dev/null && echo "chimpss-recovery --help OK"
+
+# Backward-compat shims
+python -c "from gpcr_pca_utils import Structure_Analyzer; print('shim gpcr_pca_utils OK')"
+python -c "from GetContactsHelper import ContactNetworkBuilder; print('shim GetContactsHelper OK')"
+python -c "from DistanceMatrix.DistanceMatrix import DistanceMatrix; print('shim DistanceMatrix OK')"
+
+echo "Phase 6 OK"

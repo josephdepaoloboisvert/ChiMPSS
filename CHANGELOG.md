@@ -18,6 +18,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `utils/utils.py` retained as-is: still imported by `Bridgeport/Bridgeport.py` (legacy) and several notebooks; will be shimmed in Phase 7 during notebook cleanup
 - `utility/` directory retained as-is: `Build(BP).ipynb`, `ChiMPSS-Showcase.ipynb`, and `NewDistanceMatrix.ipynb` import from it; will be converted to shims in Phase 7
 
+### Added (Phase 6 — Analysis module + CLI entry points)
+- `src/chimpss/analysis/__init__.py`: new analysis package
+- `src/chimpss/analysis/contacts.py`: thin re-export of `ContactNetworkBuilder` from `chimpss.fultonmarket.contact_network`
+- `src/chimpss/analysis/pdb_fetch.py`: library functions for querying GPCRdb — `get`, `fetch_family_proteins`, `list_families`, `classify_method`
+- `src/chimpss/analysis/distance_matrix.py`: consolidated `DistanceMatrix.py` + `DistanceMatrixUtils.py` — `DistanceMatrix` class plus all `_calc_*` and `_compute_*` helpers; Python 3.8 f-string fix in `printf`
+- `src/chimpss/analysis/grid_potentials.py`: library-only portion of root `grid_potentials.py` — `IO_Grid`, `select_whole_residues`, `parameterize_from_pdb`, `simulate_from_filepair`; module-level simulation script code (original lines 343–442) excluded; imports updated to `chimpss.bridgeport.*`
+- `src/chimpss/analysis/gpcr_pca.py`: consolidated `gpcr_pca_utils.py` + library helpers from `generate_pca_gpcrs.py` + library helpers from `project_pca_gpcrs.py` — all BW-mapping helpers, `Structure_Analyzer`, `fetch_all_parallel`, PCA helper functions, projection helpers, verbose diagnostics
+- `src/chimpss/cli/__init__.py`: CLI package
+- `src/chimpss/cli/motorrow.py`: argparse wrapper → `chimpss-motorrow`
+- `src/chimpss/cli/fultonmarket.py`: argparse wrapper → `chimpss-fultonmarket`
+- `src/chimpss/cli/fultonmarket_mpi.py`: MPI GPU-assignment wrapper → `chimpss-fultonmarket-mpi`; delegates to `chimpss.cli.fultonmarket.main()` (no `runpy.run_path` dependency)
+- `src/chimpss/cli/retro_analysis.py`: argparse wrapper → `chimpss-retro-analysis`; fixes `None` bug in original `RUN_RETRO_ANALYSIS.py` (`output_cache_dir` defaulted to `<input_dir>/retro_cache/`); adds `--sele_str`, `--getcontacts_script`, `--conda_env`, `--getcontacts_python` args (replacing hardcoded Expanse paths)
+- `src/chimpss/cli/recovery.py`: argparse wrapper → `chimpss-recovery`; converts `sys.argv[1]` to proper argparse
+- `src/chimpss/cli/fetch_pdbs.py`: CLI portion of `fetch_pdb_list.py` → `chimpss-fetch-pdbs`
+- `src/chimpss/cli/generate_pca.py`: CLI portion of `generate_pca_gpcrs.py` → `chimpss-generate-pca`
+- `src/chimpss/cli/project_pca.py`: CLI portion of `project_pca_gpcrs.py` → `chimpss-project-pca`
+- `scripts/slurm/run_one.job`: Expanse single-GPU job script (updated `python RUN_FULTONMARKET.py` → `chimpss-fultonmarket`)
+- `scripts/slurm/run_mpi.job`: Expanse 4-GPU MPI job script (updated `mpiexec.hydra -np 4 python RUN_FULTONMARKET_MPI.py` → `mpiexec.hydra -np 4 chimpss-fultonmarket-mpi`)
+- `scripts/slurm/recovery.job`: recovery job script (updated `python recovery.py` → `chimpss-recovery`)
+
+### Changed (Phase 6)
+- `pyproject.toml`: `[project.scripts]` entries uncommented and active for all 8 entry points (`chimpss-bridgeport` deferred — no `RUN_BRIDGEPORT.py` source; Bridgeport is used interactively)
+
+### Backward-compat shims added (Phase 6)
+- `gpcr_pca_utils.py` → `from chimpss.analysis.gpcr_pca import *`
+- `GetContactsHelper.py` → re-exports `ContactNetworkBuilder` from `chimpss.fultonmarket.contact_network`
+- `DistanceMatrix/DistanceMatrix.py` → re-exports `DistanceMatrix` from `chimpss.analysis.distance_matrix`
+- `DistanceMatrix/DistanceMatrixUtils.py` → re-exports all `_calc_*` / `_compute_*` helpers from `chimpss.analysis.distance_matrix`
+- `fetch_pdb_list.py` → delegates to `chimpss.cli.fetch_pdbs.main()`
+- `generate_pca_gpcrs.py` → delegates to `chimpss.cli.generate_pca.main()`
+- `project_pca_gpcrs.py` → delegates to `chimpss.cli.project_pca.main()`
+
 
 - `pyproject.toml`: package skeleton — `pip install -e .` now works; `requires-python = ">=3.8"`; loose dep pins; `[dev]`, `[mpi]`, `[docs]` extras
 - `src/chimpss/__init__.py`: package entry point, `__version__ = "0.1.0"`
