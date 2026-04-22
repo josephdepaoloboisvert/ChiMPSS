@@ -30,3 +30,12 @@ pytest tests/unit/test_bridgeport/ -v
 # Backward-compat shim check
 python -c "from Bridgeport import Bridgeport; print('shim OK')"
 echo "Phase 2 OK"
+
+# ── Phase 3: MotorRow migration ────────────────────────────────────────────
+echo "=== Phase 3: MotorRow ==="
+python -c "from chimpss.motorrow import MotorRow; print('MotorRow OK:', MotorRow)"
+python -c "from chimpss.motorrow.utils import get_positions_from_pdb, restrain_atoms, unpack_infiles; print('motorrow.utils OK')"
+pytest tests/unit/test_motorrow/ -v
+# Backward-compat shim check
+python -c "from MotorRow import MotorRow; print('shim OK')"
+echo "Phase 3 OK"

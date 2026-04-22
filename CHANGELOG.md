@@ -14,3 +14,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `src/chimpss/bridgeport/`: Bridgeport and all dependencies migrated from `Bridgeport/`, `utils/`, `RepairProtein/`, `Ligand/`, `ForceFields/`, `Minimizer/`; all `sys.path.append` hacks removed; cross-module imports rewritten to `chimpss.bridgeport.*`; IPython side effects guarded with try/except
 - `Bridgeport/__init__.py`: shim re-export → `chimpss.bridgeport.Bridgeport` (retained for one release cycle)
 - `tests/unit/test_bridgeport/test_imports.py`: smoke tests (skip-if-no-mdtraj)
+- `src/chimpss/motorrow/`: MotorRow and MotorRow_utils migrated from repo root; `sys.path.append` removed; imports rewritten to `chimpss.motorrow.*`; wildcard `from MotorRow_utils import *` replaced with explicit named imports
+- `MotorRow.py`: shim re-export → `chimpss.motorrow.MotorRow` (retained for one release cycle)
+- `tests/unit/test_motorrow/test_imports.py`: smoke tests (skip-if-no-openmm)
