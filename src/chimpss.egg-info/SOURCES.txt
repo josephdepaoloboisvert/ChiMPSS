@@ -6,3 +6,17 @@ src/chimpss.egg-info/SOURCES.txt
 src/chimpss.egg-info/dependency_links.txt
 src/chimpss.egg-info/requires.txt
 src/chimpss.egg-info/top_level.txt
+src/chimpss/bridgeport/__init__.py
+src/chimpss/bridgeport/_utils.py
+src/chimpss/bridgeport/analogue.py
+src/chimpss/bridgeport/bridgeport.py
+src/chimpss/bridgeport/forcefield.py
+src/chimpss/bridgeport/ligand.py
+src/chimpss/bridgeport/ligand_utils.py
+src/chimpss/bridgeport/minimizer.py
+src/chimpss/bridgeport/minimizer_utils.py
+src/chimpss/bridgeport/mutated_peptide.py
+src/chimpss/bridgeport/openmm_joiner.py
+src/chimpss/bridgeport/protein_preparer.py
+src/chimpss/bridgeport/repair_protein.py
+src/chimpss/bridgeport/wat_opc3.xml

@@ -4,7 +4,10 @@
       "Bash(python -c ':*)",
       "Bash(grep -E \"\\\\.ipynb$\")",
       "Bash(grep -E \"^-.*py$\")",
-      "Read(//c/Users/josep/CODE/githubs/ChiMPSS/**)"
+      "Read(//c/Users/josep/CODE/githubs/ChiMPSS/**)",
+      "Bash(python -c \"import chimpss; print\\('chimpss OK:', chimpss.__version__\\)\")",
+      "Bash(python -m pytest tests/unit/test_bridgeport/ -v --no-deps)",
+      "Bash(python -m pytest tests/unit/test_bridgeport/ -v)"
     ]
   }
 }
