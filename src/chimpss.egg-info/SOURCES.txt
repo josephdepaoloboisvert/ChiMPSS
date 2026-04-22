@@ -1,0 +1,8 @@
+README.md
+pyproject.toml
+src/chimpss/__init__.py
+src/chimpss.egg-info/PKG-INFO
+src/chimpss.egg-info/SOURCES.txt
+src/chimpss.egg-info/dependency_links.txt
+src/chimpss.egg-info/requires.txt
+src/chimpss.egg-info/top_level.txt
