@@ -209,9 +209,9 @@ class Ligand():
     def _prepare_peptide(self):
         """
         """
-        from utils.utils import write_FASTA
-        from utils.ProteinPreparer import ProteinPreparer
-        from RepairProtein.RepairProtein import RepairProtein
+        from chimpss.shared.io import write_FASTA
+        from chimpss.bridgeport.protein_preparer import ProteinPreparer
+        from chimpss.bridgeport.repair_protein import RepairProtein
         # Repair with RepairProtein
         if self.sequence is not False:
             # Write fasta

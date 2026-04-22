@@ -56,3 +56,14 @@ python -c "from FultonMarket.FultonMarketAnalysis import FultonMarketAnalysis; p
 python -c "from FultonMarket.FultonMarketUtils import truncate_ncdf, frobenius_norm; print('shim FultonMarketUtils OK')"
 python -c "from FultonMarket import FultonMarket, Randolph, FultonMarketAnalysis; print('shim package __init__ OK')"
 echo "Phase 4 OK"
+
+# ── Phase 5: Shared utilities ──────────────────────────────────────────────
+echo "=== Phase 5: shared utilities ==="
+python -c "import chimpss.shared; print('chimpss.shared importable')"
+python -c "from chimpss.shared.io import ensure_exists, write_FASTA, change_resname, describe_system, describe_state, cif2pdb, remove_dummy_atoms, isolate_chains, slice_select; print('shared.io OK')"
+python -c "from chimpss.shared.logging import timestamp, printf, unique_residues, report_chain_information; print('shared.logging OK')"
+# Confirm migrated bridgeport.ligand uses only internal chimpss imports
+python -c "from chimpss.bridgeport.ligand import Ligand; print('bridgeport.ligand OK')"
+# Backward-compat shim check
+python -c "from utils.ProteinPreparer import ProteinPreparer; print('shim utils.ProteinPreparer OK')"
+echo "Phase 5 OK"

@@ -6,6 +6,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- `src/chimpss/shared/__init__.py`: new shared utilities package
+- `src/chimpss/shared/io.py`: consolidated I/O helpers from `utils/utils.py` and `utility/` — `ensure_exists`, `write_FASTA` (canonical version, returns path), `cif2pdb`, `remove_dummy_atoms`, `isolate_chains`, `slice_select`, `change_resname`, `describe_system`, `describe_state`; Python 3.8 f-string fix in `isolate_chains` (nested quote removed)
+- `src/chimpss/shared/logging.py`: consolidated logging helpers from `utility/Reporting.py` — `timestamp`, `printf`, `unique_residues`, `report_chain_information`; Python 3.8 f-string fix in `printf`
+- `utils/ProteinPreparer.py`: shim re-export → `chimpss.bridgeport.protein_preparer.ProteinPreparer` (retained for one release cycle)
+
+### Changed
+- `src/chimpss/bridgeport/ligand.py`: three lazy imports in `_prepare_peptide` updated — `from utils.utils import write_FASTA` → `chimpss.shared.io`, `from utils.ProteinPreparer import ProteinPreparer` → `chimpss.bridgeport.protein_preparer`, `from RepairProtein.RepairProtein import RepairProtein` → `chimpss.bridgeport.repair_protein`; all inter-package `sys.path` hacks now eliminated from migrated bridgeport code
+
+### Notes (Phase 5)
+- `utils/utils.py` retained as-is: still imported by `Bridgeport/Bridgeport.py` (legacy) and several notebooks; will be shimmed in Phase 7 during notebook cleanup
+- `utility/` directory retained as-is: `Build(BP).ipynb`, `ChiMPSS-Showcase.ipynb`, and `NewDistanceMatrix.ipynb` import from it; will be converted to shims in Phase 7
+
+
 - `pyproject.toml`: package skeleton — `pip install -e .` now works; `requires-python = ">=3.8"`; loose dep pins; `[dev]`, `[mpi]`, `[docs]` extras
 - `src/chimpss/__init__.py`: package entry point, `__version__ = "0.1.0"`
 - `.pre-commit-config.yaml`: ruff + black + nbstripout hooks
