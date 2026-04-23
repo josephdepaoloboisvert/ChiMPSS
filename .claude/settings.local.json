@@ -8,7 +8,29 @@
       "Bash(python -c \"import chimpss; print\\('chimpss OK:', chimpss.__version__\\)\")",
       "Bash(python -m pytest tests/unit/test_bridgeport/ -v --no-deps)",
       "Bash(python -m pytest tests/unit/test_bridgeport/ -v)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Read(//c/Users/josep/.claude/plans/**)",
+      "Bash(xargs ls *)",
+      "Bash(awk '{print $5, $NF}')",
+      "Bash(sort -k2)",
+      "Bash(python3 -c \" import sys, json nb = json.load\\(sys.stdin\\) for i, cell in enumerate\\(nb['cells']\\): if cell['cell_type'] == 'code': src = ''.join\\(cell['source']\\) if 'def ' in src or 'class ' in src or 'import' in src: print\\(f'--- Cell {i} ---'\\) print\\(src[:800]\\) print\\(\\) \")",
+      "Bash(python3 -c \" import sys, json nb = json.load\\(sys.stdin\\) for i, cell in enumerate\\(nb['cells']\\): if cell['cell_type'] == 'code': src = ''.join\\(cell['source']\\) if 'def ' in src or 'class ' in src or 'import' in src: print\\(f'--- Cell {i} ---'\\) print\\(src[:600]\\) print\\(\\) \")",
+      "Bash(python3 -c ' *)",
+      "Read(//usr/**)",
+      "Read(//c/Users/Josep/anaconda3/envs//**)",
+      "Bash(/c/Users/Josep/anaconda3/python -c ' *)",
+      "Read(//c/Users/joseph/CODE/githubs/ChiMPSS/ChiMPSS/**)",
+      "Read(//c/Users/joseph184depaolo/CODE/githubs/ChiMPSS/ChiMPSS/**)",
+      "Read(//c/Users/**)",
+      "Bash(/c/Users/josep/anaconda3/python -c ' *)",
+      "Bash(/c/Users/Josep/CODE/githubs/ChiMPSS/ChiMPSS/DistanceMatrix/Untitled.ipynb)",
+      "Bash(python -c ' *)",
+      "Bash(python patch_notebooks.py)",
+      "Bash(git mv *)",
+      "Bash(git commit -m ' *)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\josep\\.claude\\plans"
     ]
   }
 }
