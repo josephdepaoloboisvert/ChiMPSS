@@ -5,6 +5,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added (Phase 8 — Test suite + CI)
+- `tests/conftest.py`: shared fixtures — `tmp_dir`, `small_pdb_content`, `small_pdb`, `pdb_with_dummy`, `opm_pdb_path`
+- `tests/unit/test_shared/test_logging.py`: pure-stdlib tests for `timestamp` and `printf`; mdtraj-gated test for `unique_residues` + `report_chain_information`
+- `tests/unit/test_shared/test_io.py`: mdtraj-gated tests for `ensure_exists`, `write_FASTA`, `remove_dummy_atoms`
+- `tests/unit/test_fultonmarket/test_retro_logic.py`: pure-numpy tests for `resolve_write_dir`, `resolve_cache_dir`, `build_checks`, `print_summary_table`, `log_mode` — runs on CI with no MD stack via direct submodule import (bypasses heavy package `__init__`)
+- `tests/unit/test_fultonmarket/test_math.py`: openmm-gated tests for `geometric_distribution`, `frobenius_norm`, `jsd_distance_matrices`, `rmsd`
+- `tests/unit/test_analysis/test_pdb_fetch.py`: requests-gated tests for `classify_method` (pure logic, no network)
+- `tests/unit/test_analysis/test_gpcr_pca.py`: MDAnalysis-gated tests for `three_to_one`, `_normalize_resname`, `build_gpcrdb_sequence`, `sliding_window_align`, `naming_from_convention`
+- `tests/regression/test_fultonmarket_e2e.py`: `@pytest.mark.slow @pytest.mark.gpu` rewrite of `Test_Things_Work.py`; uses `--sim-dir`/`--pdb` CLI options; skips when fixtures absent
+- `tests/regression/test_retro_conv.py`: `@pytest.mark.slow` rewrite of root `test_retro_conv.py`; all Expanse-hardcoded paths replaced with `pytest.addoption` CLI args
+
+### Changed (Phase 8)
+- `tests/unit/test_fultonmarket/test_retro_plotting.py`: added `pytest.importorskip("openmm")` guard (was missing — would error on CI without openmm)
+- `.github/workflows/ci.yml`: added `unit-tests` job across Python 3.8/3.10/3.12; installs `pytest numpy scipy matplotlib requests` and runs the three test files that need no MD stack
+
+
+
 ### Added
 - `src/chimpss/shared/__init__.py`: new shared utilities package
 - `src/chimpss/shared/io.py`: consolidated I/O helpers from `utils/utils.py` and `utility/` — `ensure_exists`, `write_FASTA` (canonical version, returns path), `cif2pdb`, `remove_dummy_atoms`, `isolate_chains`, `slice_select`, `change_resname`, `describe_system`, `describe_state`; Python 3.8 f-string fix in `isolate_chains` (nested quote removed)

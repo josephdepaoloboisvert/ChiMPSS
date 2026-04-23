@@ -179,3 +179,30 @@ print('Phase 7a/D: import cleanup OK')
 pytest tests/unit/test_fultonmarket/test_retro_plotting.py -v
 
 echo "Phase 7 OK"
+
+# ── Phase 8: Test suite + CI ──────────────────────────────────────────────────
+echo "=== Phase 8: test suite ==="
+
+# 8a: pure-logic unit tests (no MD stack needed — numpy only)
+pytest tests/unit/test_shared/test_logging.py -v
+pytest tests/unit/test_fultonmarket/test_retro_logic.py -v
+
+# 8b: shared.io tests (requires mdtraj)
+pytest tests/unit/test_shared/test_io.py -v
+
+# 8c: fultonmarket math tests (requires openmm)
+pytest tests/unit/test_fultonmarket/test_math.py -v
+
+# 8d: fultonmarket plotting tests (requires openmm + matplotlib)
+pytest tests/unit/test_fultonmarket/test_retro_plotting.py -v
+
+# 8e: analysis pdb_fetch tests (requires requests)
+pytest tests/unit/test_analysis/test_pdb_fetch.py -v
+
+# 8f: analysis gpcr_pca tests (requires MDAnalysis)
+pytest tests/unit/test_analysis/test_gpcr_pca.py -v
+
+# 8g: full unit test suite, all markers except slow/gpu
+pytest tests/unit/ -v -m "not slow and not gpu"
+
+echo "Phase 8 OK"

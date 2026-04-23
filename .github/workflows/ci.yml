@@ -48,3 +48,39 @@ jobs:
 
       - name: Smoke import
         run: python -c "import chimpss; print(chimpss.__version__)"
+
+  unit-tests:
+    name: Unit tests (lightweight deps)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.8", "3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install chimpss + lightweight test deps
+        # numpy/scipy/matplotlib/requests are all pip-installable and cover
+        # the unit tests that don't require the MD stack (openmm, mdtraj, etc.).
+        # MD-stack-dependent tests are gated with pytest.importorskip and
+        # validated via tests/VERIFY.sh on Expanse HPC.
+        run: |
+          pip install -e . --no-deps
+          pip install pytest numpy scipy matplotlib requests
+
+      - name: Run lightweight unit tests
+        # Runs only the tests that need no MD stack:
+        #   test_shared/test_logging.py  — stdlib only
+        #   test_fultonmarket/test_retro_logic.py — numpy only (direct submodule import)
+        #   test_analysis/test_pdb_fetch.py — requests + pure logic
+        # All other tests are skipped automatically via importorskip.
+        run: |
+          pytest \
+            tests/unit/test_shared/test_logging.py \
+            tests/unit/test_fultonmarket/test_retro_logic.py \
+            tests/unit/test_analysis/test_pdb_fetch.py \
+            -v --tb=short -m "not slow and not gpu"

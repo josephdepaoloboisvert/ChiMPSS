@@ -1,5 +1,8 @@
+import pytest
 import matplotlib
 matplotlib.use('Agg')
+
+pytest.importorskip("openmm", reason="openmm not installed — skipping fultonmarket plotting tests")
 
 
 def test_imports():
