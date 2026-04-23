@@ -104,3 +104,78 @@ python -c "from GetContactsHelper import ContactNetworkBuilder; print('shim GetC
 python -c "from DistanceMatrix.DistanceMatrix import DistanceMatrix; print('shim DistanceMatrix OK')"
 
 echo "Phase 6 OK"
+
+# ── Phase 7: Notebook audit, extraction, and reorganization ──────────────────
+echo "=== Phase 7: notebook reorganization ==="
+
+# 7a: plotting helpers importable from package
+python -c "
+from chimpss.fultonmarket import plot_convergence_metric, add_equil_metric_to_plot
+from chimpss.fultonmarket.retro_convergence import _RETRO_COLOR_MAP
+assert callable(plot_convergence_metric)
+assert callable(add_equil_metric_to_plot)
+assert {'torsion','alpha_carbon','contact'} == set(_RETRO_COLOR_MAP)
+print('Phase 7a: retro plotting helpers OK')
+"
+
+# 7b: notebook directory layout
+python -c "
+import os, sys
+checks = {
+    'DIR notebooks/tutorials':    os.path.isdir('notebooks/tutorials'),
+    'DIR notebooks/examples':     os.path.isdir('notebooks/examples'),
+    'DIR notebooks/analysis':     os.path.isdir('notebooks/analysis'),
+    'DIR notebooks/exploratory':  os.path.isdir('notebooks/exploratory'),
+    'tutorials/07-System_Preparation.ipynb': os.path.isfile('notebooks/tutorials/07-System_Preparation.ipynb'),
+    'examples/interactive.ipynb':            os.path.isfile('notebooks/examples/interactive.ipynb'),
+    'examples/ANALOGUE_EXAMPLE.ipynb':       os.path.isfile('notebooks/examples/ANALOGUE_EXAMPLE.ipynb'),
+    'examples/Build(BP).ipynb':              os.path.isfile('notebooks/examples/Build(BP).ipynb'),
+    'analysis/Retro_Analysis.ipynb':         os.path.isfile('notebooks/analysis/Retro_Analysis.ipynb'),
+    'analysis/PCA_of_GPCRs.ipynb':           os.path.isfile('notebooks/analysis/PCA_of_GPCRs.ipynb'),
+    'analysis/NewDistanceMatrix.ipynb':      os.path.isfile('notebooks/analysis/NewDistanceMatrix.ipynb'),
+    'exploratory/Minimize.ipynb':            os.path.isfile('notebooks/exploratory/Minimize.ipynb'),
+    'exploratory/Docking_Test.ipynb':        os.path.isfile('notebooks/exploratory/Docking_Test.ipynb'),
+    'DELETED DistanceMatrix/Untitled.ipynb': not os.path.isfile('DistanceMatrix/Untitled.ipynb'),
+    'DELETED root Minimize.ipynb':           not os.path.isfile('Minimize.ipynb'),
+}
+failures = [k for k, v in checks.items() if not v]
+if failures:
+    print('LAYOUT FAILURES:', failures); sys.exit(1)
+print('Phase 7b: notebook layout OK')
+"
+
+# 7a/D: no old import patterns remain in reorganized notebooks
+python -c "
+import json, glob, sys
+OLD = [
+    'from Bridgeport.Bridgeport import',
+    'from MotorRow import MotorRow',
+    'from FultonMarket.FultonMarket import',
+    'from FultonMarket.FultonMarketAnalysis import',
+    'from FultonMarket.analysis.',
+    'from DistanceMatrix.DistanceMatrix import',
+    'from utility.Reporting import',
+    'from utility.General import',
+    'from utility.FileManipulations import',
+    'from RepairProtein.RepairProtein import',
+]
+failures = []
+for path in glob.glob('notebooks/**/*.ipynb', recursive=True):
+    try:
+        nb = json.load(open(path, encoding='utf-8', errors='replace'))
+        for i, cell in enumerate(nb.get('cells',[])):
+            if cell.get('cell_type') == 'code':
+                src = ''.join(cell.get('source', []))
+                for pat in OLD:
+                    if pat in src:
+                        failures.append(f'{path} cell {i}: \"{pat}\"')
+    except Exception:
+        pass
+if failures:
+    print('OLD IMPORTS FOUND:'); [print(' ', f) for f in failures]; sys.exit(1)
+print('Phase 7a/D: import cleanup OK')
+"
+
+pytest tests/unit/test_fultonmarket/test_retro_plotting.py -v
+
+echo "Phase 7 OK"

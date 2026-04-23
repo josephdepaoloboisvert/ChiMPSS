@@ -19,6 +19,10 @@ from chimpss.fultonmarket.utils import (
     frobenius_norm,
     jsd_distance_matrices,
 )
+from chimpss.fultonmarket.retro_convergence import (
+    plot_convergence_metric,
+    add_equil_metric_to_plot,
+)
 
 __all__ = [
     "FultonMarket",
@@ -30,4 +34,6 @@ __all__ = [
     "truncate_ncdf",
     "frobenius_norm",
     "jsd_distance_matrices",
+    "plot_convergence_metric",
+    "add_equil_metric_to_plot",
 ]

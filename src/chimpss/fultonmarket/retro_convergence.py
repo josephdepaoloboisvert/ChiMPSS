@@ -303,3 +303,101 @@ def log_mode(read_only: bool, output_cache_dir: Optional[str], _printf=None):
         _log(f'Mode: cache directory (writes -> {output_cache_dir})')
     else:
         _log('Mode: normal (reads and writes inside output_dir)')
+
+
+# ---------------------------------------------------------------------------
+# Visualization helpers
+# ---------------------------------------------------------------------------
+
+_RETRO_COLOR_MAP: Dict[str, str] = {
+    'torsion': 'g',
+    'alpha_carbon': 'c',
+    'contact': 'darkorange',
+}
+
+
+def plot_convergence_metric(
+    metric_dict: dict,
+    func: str = 'jsd',
+    distype: str = 'torsion',
+    history: bool = True,
+    show_all: bool = False,
+    color_map: Optional[Dict[str, str]] = None,
+) -> None:
+    """
+    Plot per-checkpoint convergence metric from ``retro_convergence_report``.
+
+    Parameters
+    ----------
+    metric_dict : dict
+        The ``metrics`` return value of
+        ``FultonMarketAnalysis.retro_convergence_report()``.
+    func : str
+        Metric function; ``'jsd'`` or ``'frobenius'``.
+    distype : str
+        Distance type; one of ``'torsion'``, ``'alpha_carbon'``, ``'contact'``.
+    history : bool
+        If True, draw connecting lines from earlier checkpoints to the current one.
+    show_all : bool
+        If True, scatter every checkpoint (one point per sim_no). If False
+        (default), only plot from the final checkpoint looking back.
+    color_map : dict, optional
+        Override the default ``_RETRO_COLOR_MAP``.
+    """
+    import matplotlib.pyplot as plt
+
+    cmap = color_map if color_map is not None else _RETRO_COLOR_MAP
+    n_sim_nos = len(metric_dict)
+    if n_sim_nos == 0:
+        return
+
+    for sim_no, metrics in metric_dict.items():
+        if show_all or sim_no == n_sim_nos - 1:
+            dists = metrics.get(func, {}).get(distype, [])
+            if dists:
+                x_0, y_0 = sim_no, dists[-1]
+                if history:
+                    xs = [x_0 - i for i in range(len(dists))]
+                    ys = list(reversed(dists))
+                    plt.plot(
+                        [(x + 1) / n_sim_nos for x in xs],
+                        ys,
+                        c=cmap[distype],
+                    )
+                    if show_all:
+                        plt.scatter(
+                            [(x + 1) / n_sim_nos for x in xs],
+                            ys,
+                            c=cmap[distype],
+                            s=12,
+                        )
+                plt.scatter((x_0 + 1) / n_sim_nos, y_0, c=cmap[distype])
+
+
+def add_equil_metric_to_plot(metric_dict: dict) -> None:
+    """
+    Overlay equilibration-fraction markers on an existing convergence plot.
+
+    Markers are blue when the equilibration discard fraction is below 80 % and
+    red when it meets or exceeds 80 %.
+
+    Parameters
+    ----------
+    metric_dict : dict
+        The ``metrics`` return value of
+        ``FultonMarketAnalysis.retro_convergence_report()``.
+    """
+    import matplotlib.pyplot as plt
+
+    n_sim_nos = len(metric_dict)
+    if n_sim_nos == 0:
+        return
+    sim_nos = list(metric_dict.keys())
+    equil_fractions = [metric_dict[k]['equil_fraction'] for k in sim_nos]
+    colors = ['b' if frac < 0.80 else 'r' for frac in equil_fractions]
+    plt.scatter(
+        [(s + 1) / n_sim_nos for s in sim_nos],
+        equil_fractions,
+        c=colors,
+        marker='*',
+    )
