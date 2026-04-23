@@ -18,6 +18,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `utils/utils.py` retained as-is: still imported by `Bridgeport/Bridgeport.py` (legacy) and several notebooks; will be shimmed in Phase 7 during notebook cleanup
 - `utility/` directory retained as-is: `Build(BP).ipynb`, `ChiMPSS-Showcase.ipynb`, and `NewDistanceMatrix.ipynb` import from it; will be converted to shims in Phase 7
 
+### Added (Phase 7 — Notebook audit, extraction, and reorganization)  commit 60c700d
+- `src/chimpss/fultonmarket/retro_convergence.py`: added `plot_convergence_metric`, `add_equil_metric_to_plot`, and `_RETRO_COLOR_MAP` — extracted from `Retro_Analysis.ipynb`; exported from `chimpss.fultonmarket`
+- `tests/unit/test_fultonmarket/test_retro_plotting.py`: smoke tests for the two new plotting helpers
+- `notebooks/tutorials/`: 14 numbered tutorial notebooks (01–13) moved from flat `notebooks/`
+- `notebooks/examples/`: 8 example notebooks moved from `interactive/` + `notebooks/`; `interactive_utils.py` co-located
+- `notebooks/analysis/`: 7 analysis notebooks (PCA, Retro, Distance Matrix, Interaction Energy, MPI compare, Run_MR_FM, Analyze_MPI_3.5)
+- `notebooks/exploratory/`: 10 exploratory notebooks (Minimize, Fieg2005, Water_Hole, Talha_Contacts, Static_Env, implicit_membrane, Adjust_System, Docking_Test, BOX_VISUALISATION, Ligand_test)
+
+### Changed (Phase 7)
+- 23 notebooks updated: `sys.path.append` hacks removed; old flat imports (`Bridgeport.Bridgeport`, `MotorRow`, `FultonMarket.*`, `utility.*`, `DistanceMatrix.*`, `RepairProtein.*`) replaced with `chimpss.*` package imports
+- `notebooks/analysis/Retro_Analysis.ipynb`: function-definition cells replaced with `from chimpss.fultonmarket import plot_convergence_metric, add_equil_metric_to_plot`
+- `notebooks/analysis/PCA_of_GPCRs.ipynb`: `Structure_Analyzer` class-definition cell replaced with `from chimpss.analysis.gpcr_pca import Structure_Analyzer`
+- `notebooks/analysis/NewDistanceMatrix.ipynb`: note cell added documenting JAX backend relationship and planned Phase 7.5 CPU/GPU dispatch work
+
+### Deleted (Phase 7)
+- `DistanceMatrix/Untitled.ipynb`: empty 78-byte placeholder removed
+
 ### Added (Phase 6 — Analysis module + CLI entry points)
 - `src/chimpss/analysis/__init__.py`: new analysis package
 - `src/chimpss/analysis/contacts.py`: thin re-export of `ContactNetworkBuilder` from `chimpss.fultonmarket.contact_network`
