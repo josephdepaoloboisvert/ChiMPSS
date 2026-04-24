@@ -4,8 +4,8 @@ CLI entry point for FultonMarket parallel tempering REMD simulation.
 Console script: chimpss-fultonmarket
 """
 
-import os
 import argparse
+import os
 
 
 def parse_args():

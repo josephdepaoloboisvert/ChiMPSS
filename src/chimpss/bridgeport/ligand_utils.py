@@ -1,26 +1,22 @@
-import textwrap, sys, os, glob, shutil
-import numpy as np
+from datetime import datetime
+from typing import List
+
 import MDAnalysis as mda
-from MDAnalysis.analysis.align import alignto
-from MDAnalysis.analysis.rms import rmsd
+import numpy as np
 from MDAnalysis.analysis.bat import BAT
 from MDAnalysis.lib.distances import calc_dihedrals
-from MDAnalysis.coordinates.PDB import PDBWriter
-from typing import List
-from datetime import datetime
-import rdkit
 from rdkit import Chem
-from rdkit.Chem import AllChem, rdFMCS
-from rdkit.Chem import rdForceFieldHelpers
-from rdkit.Chem.AllChem import AssignBondOrdersFromTemplate
+from rdkit.Chem import AllChem, rdFMCS, rdForceFieldHelpers
+
 
 # Lambda functions
-atom_rmsd = lambda a, b: np.sqrt(np.mean(np.sum((b-a)**2, axis=-1)))
+def atom_rmsd(a, b):
+    return np.sqrt(np.mean(np.sum((b-a)**2, axis=-1)))
 
 # Methods
 def match_internal_coordinates(ref_match: mda.AtomGroup, ref_match_atoms: List, ref_match_resids: List, mobile: mda.AtomGroup, mobile_match_atoms: List, verbose: bool=False):
     """
-    Return an MDAnalysis.AtomGroup with internal coordinates that match a reference. 
+    Return an MDAnalysis.AtomGroup with internal coordinates that match a reference.
 
     Parameters:
     -----------
@@ -34,7 +30,7 @@ def match_internal_coordinates(ref_match: mda.AtomGroup, ref_match_atoms: List, 
             List of resids of atoms in ref_match_atoms. EX:['UNK', 'UNK']
 
         mobile (mda.AtomGroup)
-            Selection of atoms to change internal angles to match those of ref_match. 
+            Selection of atoms to change internal angles to match those of ref_match.
 
         mobile_match_atoms (List[str]):
             List of atom names that correspond to the matching atom in mobile compared to ref_match_atoms. EX: ['C12', 'C13']
@@ -42,7 +38,7 @@ def match_internal_coordinates(ref_match: mda.AtomGroup, ref_match_atoms: List, 
     Returns:
     --------
         mobile (mda.AtomGroup)
-            Selection of atoms with torsions that reflect the internal coordinates present in ref_match. 
+            Selection of atoms with torsions that reflect the internal coordinates present in ref_match.
     """
 
     def return_BAT(atomGroup: mda.AtomGroup):
@@ -50,21 +46,8 @@ def match_internal_coordinates(ref_match: mda.AtomGroup, ref_match_atoms: List, 
         R.run()
         bat = R.results.bat.copy()
         tors = bat[0, -len(R._torsion_XYZ_inds):]
-        
+
         return R, bat, tors
-    
-    def torsion_inds_to_names(atomGroup: mda.AtomGroup, tors_inds: np.array):
-        atom_names = atomGroup.atoms.names
-        print(atom_names)
-        atom_resids = atomGroup.atoms.resids
-        tors_atom_names = np.empty(tors_inds.shape, dtype='<U6')
-        tors_atom_resids = np.empty(tors_inds.shape, dtype=int)
-        for i, atom_inds in enumerate(tors_inds):
-            for j, ind in enumerate(atom_inds):
-                tors_atom_names[i,j] = atom_names[ind]
-                tors_atom_resids[i,j] = atom_resids[ind]
-    
-        return tors_atom_names, tors_atom_resids
 
     def torsion_inds_to_names(atomGroup: mda.AtomGroup, tors: np.array):
         atom_names = atomGroup.atoms.names
@@ -75,14 +58,14 @@ def match_internal_coordinates(ref_match: mda.AtomGroup, ref_match_atoms: List, 
             for j, ind in enumerate(atom_inds):
                 tors_atom_names[i,j] = atom_names[ind]
                 tors_atom_resids[i,j] = atom_resids[ind]
-    
+
         return tors_atom_names, tors_atom_resids
-                
+
     def convert_atoms(mobile_atom_names:List, mobile_match_names: List, ref_match_names: List, ref_match_resids: List):
-        
+
         ref_converted_names = []
         ref_converted_resids = []
-        
+
         for mobile_atom in mobile_atom_names:
             if mobile_atom in mobile_match_names:
                 atom_match_ind = mobile_match_names.index(mobile_atom)
@@ -94,7 +77,7 @@ def match_internal_coordinates(ref_match: mda.AtomGroup, ref_match_atoms: List, 
             else:
                 ref_converted_names.append('X')
                 ref_converted_resids.append('X')
-    
+
         return ref_converted_names, ref_converted_resids
 
     # Get analogue torsion information
@@ -113,7 +96,7 @@ def match_internal_coordinates(ref_match: mda.AtomGroup, ref_match_atoms: List, 
                                                     ref_match_resids=ref_match_resids)
 
         if 'X' not in ref_eq_atoms:
-            
+
             # Select reference atoms
             ref_tors_sele = ref_match.select_atoms('')
             for (r, a) in zip (ref_eq_resids, ref_eq_atoms):
@@ -122,7 +105,7 @@ def match_internal_coordinates(ref_match: mda.AtomGroup, ref_match_atoms: List, 
             # Calculated dihedral angle and assign to analogue
             try:
                 c1, c2, c3, c4 = ref_tors_sele.positions
-            except:
+            except Exception:
                 print('reference atoms names attempted to match:', ref_tors_sele.atoms.names, 'reference resids attempted to match', ref_tors_sele.atoms.resids, flush=True)
                 raise Exception("Could not match torsion")
             dihedral = calc_dihedrals(c1, c2, c3, c4)
@@ -133,10 +116,10 @@ def match_internal_coordinates(ref_match: mda.AtomGroup, ref_match_atoms: List, 
         elif verbose:
             print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//Could not change', atom_names, 'to match', ref_eq_atoms, flush=True)
 
-        
+
     # Convert BAT to cartesian
     mobile_bat[0, -len(mobile_tors):] = mobile_tors
-    changed_inds = [i for i in range(len(changed)) if changed[i] == True]
+    changed_inds = [i for i in range(len(changed)) if changed[i]]
     mobile_R._unique_primary_torsion_indices = list(np.unique(mobile_R._unique_primary_torsion_indices + changed_inds)) # Cancel handling of improper torsions from BAT class
     mobile.positions = mobile_R.Cartesian(mobile_bat[0])
 
@@ -150,11 +133,12 @@ def translate_rdkit_inds(mol, rdkit_inds):
     try:
         atoms = [mol.GetAtoms()[i].GetMonomerInfo().GetName().strip() for i in rdkit_inds]
         resids = [mol.GetAtoms()[i].GetPDBResidueInfo().GetResidueNumber() for i in rdkit_inds]
-    except:
+    except Exception:
         for i in rdkit_inds:
             try:
                 print(i, mol.GetAtoms()[i].GetMonomerInfo().GetName(), mol.GetAtoms()[i].GetPDBResidueInfo().GetResidueNumber())
-            except:
+            except Exception:
+                from IPython.display import display
                 from rdkit.Chem import Draw
                 mol_copy = Chem.Mol(mol)
                 Chem.rdDepictor.Compute2DCoords(mol_copy)
@@ -163,7 +147,7 @@ def translate_rdkit_inds(mol, rdkit_inds):
                 print('Could not find atom with ind:', i)
                 display(Draw.MolsToGridImage([mol_copy], drawOptions=dopts))
                 raise Exception()
-                
+
 
     return atoms, resids
 
@@ -187,7 +171,7 @@ def select(sele: mda.AtomGroup, atoms: List[str], resids: List[int]=None):
             new_sele = new_sele + sele.select_atoms(f'name {atom}')
 
 
-    return new_sele 
+    return new_sele
 
 
 
@@ -205,7 +189,7 @@ def embed_rdkit_mol(mol, template_mol=None):
         maxIters = 10000
         while ff.Minimize(maxIts=1000) and maxIters>0:
             maxIters -= 1
-    except:
+    except Exception:
         pass
 
     # Get PDB naming with correct bond orders if template is provided
@@ -220,7 +204,7 @@ def embed_rdkit_mol(mol, template_mol=None):
     return mol
 
 
-    
+
 def mol_with_atom_idx(mol):
     for atom in mol.GetAtoms():
         atom.SetAtomMapNum(atom.GetIdx())
@@ -231,7 +215,7 @@ def mol_with_atom_idx(mol):
 def compute_C_positions(A, B, angle_deg=120.0, length=1.03):
     A = np.array(A)
     B = np.array(B)
-    
+
     # Step 1: BA vector
     BA = A - B
     BA_unit = BA / np.linalg.norm(BA)
@@ -252,7 +236,7 @@ def compute_C_positions(A, B, angle_deg=120.0, length=1.03):
 
     # Step 3: Rotate by ±θ
     theta = np.deg2rad(angle_deg)
-    
+
     # First C position (rotation in one direction)
     BC1 = (np.cos(theta) * BA_unit + np.sin(theta) * perp) * length
     C1 = B + BC1
@@ -269,7 +253,7 @@ def remove_xml_atoms(xml_fn, resname, remove_atoms, change_atoms, external_bonds
     import xml.etree.ElementTree as ET
     tree = ET.parse(xml_fn)
     root = tree.getroot()
-    
+
     # Remove atom types
     # remove_types = []
     # atom_types = root.find('AtomTypes')
@@ -278,11 +262,11 @@ def remove_xml_atoms(xml_fn, resname, remove_atoms, change_atoms, external_bonds
     #     if name in remove_atoms:
     #         remove_types.append(at.attrib.get('name'))
     #         atom_types.remove(at)
-    
+
     # Remove residues
     for r in list(root.find('Residues')):
         r.attrib['name'] = resname
-        
+
         # Remove atoms
         change_types = [{} for i in range(len(change_atoms))]
         for atom in list(r.findall('Atom')):
@@ -291,17 +275,17 @@ def remove_xml_atoms(xml_fn, resname, remove_atoms, change_atoms, external_bonds
             for i, change_atom_dict in enumerate(change_atoms):
                 if atom.attrib.get('name') in change_atom_dict.keys():
                     change_types[i][atom.attrib.get('type')] = change_atom_dict[atom.attrib.get('name')]
-        
+
         # Remove bonds
         for bond in list(r.findall('Bond')):
             if bond.attrib.get('atomName1') in remove_atoms or bond.attrib.get('atomName2') in remove_atoms:
                 r.remove(bond)
-    
+
         # Add external bond
-        if external_bonds != None:
+        if external_bonds is not None:
             for atom_name in external_bonds:
                 r.append(ET.Element('ExternalBond', {'atomName': atom_name}))
-    
+
     # # Remove forces
     def change_force_entries(section_name, *attrib_keys):
         section = root.find(section_name)
@@ -316,15 +300,15 @@ def remove_xml_atoms(xml_fn, resname, remove_atoms, change_atoms, external_bonds
                             new_entry[k] = change_types_dict[entry.attrib.get(k)]
                         else:
                             new_entry[k] = entry.attrib.get(k)
-                            
+
                     if new_entry_needed:
                         section.append(ET.Element(entry.tag, new_entry))
-    
+
     change_force_entries("HarmonicBondForce", "type1", "type2")
     change_force_entries("HarmonicAngleForce", "type1", "type2", "type3")
     change_force_entries("PeriodicTorsionForce", "type1", "type2", "type3", "type4")
     # change_force_entries("NonbondedForce", "type")
-    
+
     tree.write(xml_fn, encoding="utf-8", xml_declaration=True)
 
 
@@ -357,10 +341,10 @@ def get_rdkit_MCS(mol1, mol2, strict=True):
 
 
 def get_MCS_rmsd(mob, mob_atom_inds, ref, ref_atom_inds):
-    
+
     #Iterate through conformers of mobile, evaluating the RMSD of each against ref
     ref_pos = ref.GetConformer(0).GetPositions()[ref_atom_inds]
-    
+
     if mob.GetNumConformers() == 1:
         mob_pos = mob.GetConformer(0).GetPositions()[mob_atom_inds]
         return atom_rmsd(ref_pos, mob_pos)
@@ -369,6 +353,6 @@ def get_MCS_rmsd(mob, mob_atom_inds, ref, ref_atom_inds):
         for i in range(mob.GetNumConformers()):
             mob_pos = mob.GetConformer(i).GetPositions()[mob_atom_inds]
             pose_rmsds.append(atom_rmsd(ref_pos, mob_pos))
-            
+
         return pose_rmsds
-    
+

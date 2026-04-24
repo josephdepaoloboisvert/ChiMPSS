@@ -1,6 +1,7 @@
 import os
-import numpy as np
+
 import mdtraj as md
+import numpy as np
 
 
 def ensure_exists(directory):
@@ -9,7 +10,8 @@ def ensure_exists(directory):
     return True
 
 
-slice_select = lambda traj, selection: traj.atom_slice(traj.top.select(selection))
+def slice_select(traj, selection):
+    return traj.atom_slice(traj.top.select(selection))
 
 
 def write_FASTA(sequence, name, fasta_path):
@@ -50,7 +52,7 @@ def isolate_chains(traj, work_dir, resname_limitation=None, from_file=False, ver
     for chain in traj.top.chains:
         if resname_limitation:
             limitation = resname_limitation[chain.index]
-            if type(limitation) == list:
+            if isinstance(limitation, list):
                 parts = ' or '.join([f'resname {name}' for name in limitation])
                 selection_string = f"chainid {chain.index} and ({parts})"
             elif limitation == 'protein':

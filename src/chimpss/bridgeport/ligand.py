@@ -1,22 +1,15 @@
-import textwrap, sys, os, glob, shutil
-import numpy as np
+import os
 from copy import deepcopy
-import MDAnalysis as mda
-from MDAnalysis.analysis.align import alignto
-from MDAnalysis.analysis.rms import rmsd
-from MDAnalysis.analysis.bat import BAT
-from MDAnalysis.lib.distances import calc_dihedrals
-from MDAnalysis.coordinates.PDB import PDBWriter
-import mdtraj as md
-from pdbfixer import PDBFixer
-from openbabel import openbabel
 from datetime import datetime
+
+import MDAnalysis as mda
+import mdtraj as md
 
 # rdkit
 from rdkit import Chem
-from rdkit.Chem import Draw, AllChem
-from rdkit.Chem import rdFMCS
+from rdkit.Chem import AllChem, Draw
 from rdkit.Chem.Draw import rdDepictor
+
 rdDepictor.SetPreferCoordGen(True)
 try:
     from rdkit.Chem.Draw import IPythonConsole
@@ -25,18 +18,19 @@ try:
 except Exception:
     pass
 from typing import List
+
 from chimpss.bridgeport.ligand_utils import *
 
 
 class Ligand():
     """
     """
-    def __init__(self, working_dir: str, name: str, 
+    def __init__(self, working_dir: str, name: str,
                  resname: str=False, smiles: str=False,
                  chainid: str=False, sequence: str=False,
                  verbose: bool=False):
         """
-        
+
         """
 
         # Initialize attributes
@@ -63,13 +57,13 @@ class Ligand():
 
         if self.chainid is not False and resname is not False:
             print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//' + 'Must set either resname or chainid', flush=True)
-                  
 
-    def prepare_ligand(self, 
+
+    def prepare_ligand(self,
                        small_molecule_params: bool=True,
                        sanitize: bool=True,
                        removeHs: bool=True,
-                       proximityBonding: bool=False, 
+                       proximityBonding: bool=False,
                        pH: float=7.0,
                        nstd_resids: List[int]=[],
                        neutral_Cterm: bool=False,
@@ -86,16 +80,16 @@ class Ligand():
                 If true, treat ligand like a small molecule. Default is True.
 
             sanitize (bool):
-                If true, sanitize molecule with rdkit. Default is True. Only applicable if small_molecule_params is True. 
+                If true, sanitize molecule with rdkit. Default is True. Only applicable if small_molecule_params is True.
 
             removeHs (bool):
-                If true, remove any hydrogens that may be present. Default is True. Only applicable if small_molecule_params is True. 
+                If true, remove any hydrogens that may be present. Default is True. Only applicable if small_molecule_params is True.
 
             pH (float):
                 pH to protonate a peptide ligand. Default is 7.0.
 
             nstd_resids (List[int]):
-                List of nonstandard resids to conserve from input structure. 
+                List of nonstandard resids to conserve from input structure.
 
             neutral_C-term (bool):
                 If true, neutralize the C-terminus of a peptide ligand. Only applicable is small_molecule_params is False
@@ -110,7 +104,7 @@ class Ligand():
         self.visualize = visualize
         self.loops = loops
         self.cyclic = cyclic
-        
+
         # If treating ligand like a small molecule
         if small_molecule_params:
             self._prepare_small_molecule()
@@ -120,19 +114,19 @@ class Ligand():
             self._prepare_peptide()
 
         # Change chain, if specified
-        if chain != False:
+        if chain:
             u = mda.Universe(self.pdb)
             u.atoms.chainIDs =chain
             u.atoms.write(self.pdb)
 
-    
-    def return_rdkit_mol(self, from_pdb: bool=True, 
+
+    def return_rdkit_mol(self, from_pdb: bool=True,
                                from_smiles: bool=True,
                                sanitize: bool=True,
                                removeHs: bool=False,
                                proximityBonding: bool=True):
         """
-        """        
+        """
         # Load molecules
         if from_smiles:
             template = Chem.MolFromSmiles(self.smiles, sanitize=True)
@@ -140,11 +134,11 @@ class Ligand():
             mol = Chem.MolFromPDBFile(self.pdb, sanitize=sanitize, removeHs=removeHs, proximityBonding=proximityBonding)
 
             if from_smiles:
-                
+
                 # Assign bond order from smiles
                 try:
                     mol = AllChem.AssignBondOrdersFromTemplate(template, mol)
-                except:
+                except Exception:
                     mol_copy = deepcopy(mol)
                     Chem.rdDepictor.Compute2DCoords(mol_copy)
                     display(Draw.MolsToGridImage([mol_copy], subImgSize=(600,600)))
@@ -152,7 +146,7 @@ class Ligand():
                     raise Exception(f'Could not find match between molecule smiles: {Chem.MolToSmiles(mol)} and template: {Chem.MolToSmiles(template)}')
 
             Chem.AssignStereochemistryFrom3D(mol, replaceExistingTags=False)
-    
+
         # Visualize, if specified
         if self.visualize:
             if from_pdb:
@@ -162,7 +156,7 @@ class Ligand():
             Chem.rdDepictor.Compute2DCoords(mol_copy)
             display(Draw.MolsToGridImage([mol_copy], subImgSize=(600,600)))
 
-        
+
         if from_pdb and from_smiles:
             return template, mol
         elif from_pdb:
@@ -178,7 +172,7 @@ class Ligand():
         # Assertions
         assert os.path.exists(self.pdb)
 
-        # MDA 
+        # MDA
         u = mda.Universe(self.pdb)
         return u.select_atoms('all')
 
@@ -192,16 +186,16 @@ class Ligand():
 
         # Add hydrogens
         self.mol = AllChem.AddHs(self.mol, addCoords=True, addResidueInfo=False)
-        
+
         # Save
         Chem.MolToPDBFile(self.mol, self.pdb)
         writer = Chem.SDWriter(self.sdf)
         writer.write(self.mol)
         writer.close()
-        
 
 
-        
+
+
         print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//' + 'Saved prepared ligand to', self.pdb, self.sdf, flush=True)
 
 
@@ -209,16 +203,16 @@ class Ligand():
     def _prepare_peptide(self):
         """
         """
-        from chimpss.shared.io import write_FASTA
         from chimpss.bridgeport.protein_preparer import ProteinPreparer
         from chimpss.bridgeport.repair_protein import RepairProtein
+        from chimpss.shared.io import write_FASTA
         # Repair with RepairProtein
         if self.sequence is not False:
             # Write fasta
             fasta_fn = os.path.join(os.getcwd(), 'lig.fasta')
             write_FASTA(self.sequence, 'lig', fasta_fn)
 
-            # RepairProtein                
+            # RepairProtein
             temp_working_dir = os.path.join(os.getcwd(), 'modeller')
             repairer = RepairProtein(pdb_fn=self.pdb,
                                      fasta_fn=fasta_fn,
@@ -229,15 +223,15 @@ class Ligand():
                          nstd_resids=self.nstd_resids,
                          loops=self.loops,
                          cyclic=self.cyclic)
-        
+
         # Protonate with pdb2pqr30
         pp = ProteinPreparer(pdb_path=self.pdb,
                  working_dir=self.working_dir,
                  pH=self.pH,
                  env='SOL',
-                 ion_strength=0) 
+                 ion_strength=0)
         prot_mol_path = pp._protonate_with_pdb2pqr()
-        prot_mol_path = pp._protonate_with_PDBFixer()        
+        prot_mol_path = pp._protonate_with_PDBFixer()
         os.rename(prot_mol_path, self.pdb)
 
         # Neutralize C terminus ***DEPRECATED***
@@ -263,7 +257,7 @@ class Ligand():
             c_sele = pdb.topology.select('name C and resSeq ' + str(pdb.topology.atom(nxt_sele).residue.resSeq))[0]
             c_xyz = pdb.xyz[0, c_sele]*10
             h1_xyz, h2_xyz = compute_C_positions(c_xyz, nxt_xyz)
-            
+
             # Add hydrogens
             h1_line = deepcopy(nxt_line)
             h2_line = deepcopy(nxt_line)
@@ -281,18 +275,18 @@ class Ligand():
                         h_xyz_str += f' {crd:.3f}'
                     h_xyz_str += '  '
                 h_line[32:56] = h_xyz_str
-    
+
                 if atom_no + i + 1 < 10:
                     h_line[8:11] = '  ' + str(atom_no_i+1)
                 elif atom_no + i + 1 >= 10 and atom_no + i + 1 < 100:
-                    h_line[8:11] = ' ' + str(atom_no + i + 1)            
+                    h_line[8:11] = ' ' + str(atom_no + i + 1)
                 elif atom_no + i + 1 >= 100 and atom_no + i + 1 < 1000:
                     h_line[8:11] = str(atom_no + i + 1)
                 else:
                     raise NotImplementedError(atom_no + i + 1)
-                
+
                 h_lines.append(''.join(h_line))
-    
+
             with open(self.pdb, 'w') as f:
                 for line in pdb_lines:
                     if line.startswith('ATOM'):
@@ -300,17 +294,16 @@ class Ligand():
                             f.write(nxt_line)
                         else:
                             f.write(line)
-                        
+
                 for h_line in h_lines:
                     f.write(h_line)
-    
+
                 f.write('END')
-                
+
                 f.close()
 
 
 
 
 
-        
-        
+

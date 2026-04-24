@@ -1,19 +1,19 @@
-import textwrap, sys, os, pathlib, json, warnings
-from copy import deepcopy
+import os
+import pathlib
+import warnings
+
 import numpy as np
-from rdkit import Chem
-from rdkit.Chem import Descriptors, Draw, AllChem
 
 #OpenFF
 import openff
-import openff.units
-import openff.toolkit
 import openff.interchange
+import openff.toolkit
+import openff.units
+from openmm import *
+
 #OpenMM
 from openmm.app import *
-from openmm import *
 from openmm.unit import *
-
 
 nonbonded_methods = {'NoCutoff': NoCutoff,
                      'CutoffNonPeriodic': CutoffNonPeriodic,
@@ -28,52 +28,52 @@ class ForceFieldHandler():
     SDF File - Ligand to be parameterized with OpenFF
     PDB File - Environment File to be parameterized with Amber FF14SB, Lipid17, OPC3 XML Files
     - Override the defaults with optional user specified files. Extensions must be offxml for an sdf file or xml for a pdb file.
-    
+
     Default Usage:
     --------------
         system, topology, positions = ForceFieldHandler(INPUTS).main()
-    
+
     Parameters:
     -----------
         structure_file - Input, either and an sdf or pdb file
         force_field_files - Optional Input - offxml or xml files. Can use included forcefields with either OpenFF or OpenMM
-    
+
     Returns:
     -------
         system, topology, positions as a 3-tuple
-    
+
     Attributes:
     -----------
-        default_xmls (dict): 
+        default_xmls (dict):
             Default XML files for OpenFF and OpenMM.
-            
-        structure_file (str): 
+
+        structure_file (str):
             Input file path, either an SDF or PDB file.
-            
-        working_mode (str): 
+
+        working_mode (str):
             Mode of operation based on file extension, either 'OpenFF' or 'OpenMM'.
-            
-        xmls (list): 
+
+        xmls (list):
             List of XML files to be used for parameterization.
-    
+
     Methods:
     --------
-        __init__(self, structure_file, force_field_files=None, use_defaults: bool=True): 
+        __init__(self, structure_file, force_field_files=None, use_defaults: bool=True):
             Initializes the ForceFieldHandler object with a structure file and optional force field files.
-            
-        _parse_file(self, file_fn): 
+
+        _parse_file(self, file_fn):
             Determines the working mode ('OpenFF' or 'OpenMM') based on the file extension.
-        
-        main(self, use_rdkit: bool=False): 
+
+        main(self, use_rdkit: bool=False):
             Main method for parameterization. Returns a tuple containing the system, topology, and positions.
-        
-        generate_custom_xml(self, out_xml, name): 
+
+        generate_custom_xml(self, out_xml, name):
             Generates a custom XML file for parameterization.
-        
-        neutralizeMol(mol): 
+
+        neutralizeMol(mol):
             Neutralizes the given molecule by setting radical electrons and formal charges to zero.
     """
-    
+
     def __init__(self, structure_file, force_field_files=None, use_defaults: bool=True):
         """
         Parameters:
@@ -83,24 +83,24 @@ class ForceFieldHandler():
         Returns:
             None
         """
-        self.default_xmls = {'OpenFF': ['openff-2.1.0.offxml'], 
-                        'OpenMM': ['amber14/protein.ff14SB.xml', 
+        self.default_xmls = {'OpenFF': ['openff-2.1.0.offxml'],
+                        'OpenMM': ['amber14/protein.ff14SB.xml',
                                    'amber14/lipid17.xml',
                                    f'{pathlib.Path(__file__).parent.resolve()}/wat_opc3.xml']}
         self.structure_file = structure_file
-        
+
         # Parse the structure file to see if the user is in OpenFF or OpenMM mode
         self.working_mode = self._parse_file(structure_file)
-        
+
         #If force field files were provided, check their extensions, if not use the default
-        if force_field_files is None and use_defaults == True:
+        if force_field_files is None and use_defaults:
             self.xmls = self.default_xmls[self.working_mode]
-        elif type(force_field_files) != list:
+        elif not isinstance(force_field_files, list):
             raise Exception('force_field_files parameter must be specified as a list of strings')
         else:
             mode_parse = [self._parse_file(ff_file) for ff_file in force_field_files]
             mode_check = [elem == self.working_mode for elem in mode_parse]
-            if use_defaults == True:
+            if use_defaults:
                 self.xmls = self.default_xmls['OpenMM']
             else:
                 self.xmls = []
@@ -149,7 +149,7 @@ class ForceFieldHandler():
         if self.working_mode == 'OpenFF':
             try:
                 mol = openff.toolkit.Molecule.from_file(self.structure_file)
-            except:
+            except Exception:
                 warnings.warn('WARNING: ATTEMPTING TO ALLOW UNDEFINED STEREOCHEMISTRY. CHECK OUTPUT STRUCTURE CAREFULLY')
                 mol = openff.toolkit.Molecule.from_file(self.structure_file, allow_undefined_stereo=True)
             ff = openff.toolkit.ForceField(*self.xmls)
@@ -158,17 +158,17 @@ class ForceFieldHandler():
             positions = np.array(self.interchange.positions) * nanometer
             sys = self.interchange.to_openmm_system()
             top = self.interchange.to_openmm_topology()
-    
+
         elif self.working_mode == 'OpenMM':
             ff = ForceField(*self.xmls)
             pdb = PDBFile(self.structure_file)
             top, positions = pdb.getTopology(), pdb.getPositions()
 
-            if type(use_pme) == str:
+            if isinstance(use_pme, str):
                 sys = ff.createSystem(top, nonbondedMethod=nonbonded_methods[use_pme])
-            
+
             if use_pme: #This logic block needs to be default
-                sys = ff.createSystem(top, nonbondedMethod=PME) 
+                sys = ff.createSystem(top, nonbondedMethod=PME)
             else:
                 sys = ff.createSystem(top)
 

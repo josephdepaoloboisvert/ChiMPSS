@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chimpss"
-version = "0.1.0"
+version = "0.1.1"
 description = "Chicago Membrane Protein Simulation Suite — 3-stage MD pipeline (Bridgeport → MotorRow → FultonMarket)"
 requires-python = ">=3.8"
 dependencies = [
@@ -59,7 +59,18 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
-ignore = ["E501"]
+ignore = [
+    "E501",   # line too long — handled separately
+    "F403",   # star imports (intentional: openmm, openmm.app, openmm.unit)
+    "F405",   # may be from star import (follows from F403 above)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Imports follow module-level side-effect setup (faulthandler, warnings, etc.)
+"src/chimpss/fultonmarket/__init__.py" = ["E402"]
+# Imports follow try/except blocks for optional heavy deps
+"src/chimpss/bridgeport/analogue.py" = ["E402"]
+"src/chimpss/bridgeport/ligand.py" = ["E402"]
 
 [tool.black]
 target-version = ["py38"]

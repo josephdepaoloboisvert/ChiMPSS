@@ -10,28 +10,26 @@ Usage examples:
   chimpss-generate-pca 612_gpcrs.txt --bw_positions "1.50,2.50,3.50"
 """
 
+import argparse
+import json
 import os
 import sys
-import json
-import argparse
 from collections import Counter
 
+import joblib
 import numpy as np
 from MDAnalysis.analysis import align
 from sklearn.decomposition import PCA
-import joblib
 
 from chimpss.analysis.gpcr_pca import (
     Structure_Analyzer,
-    fetch_all_parallel,
     build_bw_assignments,
-    conservation_filter,
     build_resids_copopulated,
-    select_conserved_atoms,
-    _bw_sort_key,
-    is_standard_bw,
-    load_bw_positions,
+    conservation_filter,
+    fetch_all_parallel,
     load_bw_exclude,
+    load_bw_positions,
+    select_conserved_atoms,
 )
 
 

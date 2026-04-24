@@ -4,8 +4,8 @@ CLI entry point for MotorRow equilibration.
 Console script: chimpss-motorrow
 """
 
-import os
 import argparse
+import os
 
 
 def parse_args():

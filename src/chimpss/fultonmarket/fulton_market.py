@@ -1,27 +1,16 @@
 # Package Imports
-import glob, itertools, jax, math, mpiplus, os
-from copy import deepcopy
-from datetime import datetime
-import matplotlib.pyplot as plt
-import mdtraj as md
+import os
+
 import netCDF4 as nc
 import numpy as np
-import jax.numpy as jnp
+import openmm.unit as unit
 from openmm import *
 from openmm.app import *
-import openmm.unit as unit
 from openmmtools.states import SamplerState, ThermodynamicState
-from openmmtools.utils.utils import TrackedQuantity
-from pymbar import timeseries, MBAR
-from pymbar.timeseries import detect_equilibration
-import scipy.constants as cons
-import seaborn as sns
-from sklearn.decomposition import PCA
-from typing import List
 
+from chimpss.fultonmarket.analysis import FultonMarketAnalysis
 from chimpss.fultonmarket.randolph import Randolph
 from chimpss.fultonmarket.utils import *
-from chimpss.fultonmarket.analysis import FultonMarketAnalysis
 
 
 class FultonMarket():

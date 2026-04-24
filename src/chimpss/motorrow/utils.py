@@ -1,8 +1,6 @@
-import os, shutil
-import mdtraj as md
 import numpy as np
-from openmm.app import *
 from openmm import *
+from openmm.app import *
 from openmm.unit import *
 
 
@@ -32,12 +30,12 @@ def get_positions_from_pdb(fname_pdb, lig_resname: str=None, lig_chain: str=None
             if line[17:20] in nameMembrane and element != 'H':
                 mem_heavy_atoms.append(iatom)
             elif line[:6] in ['ATOM  '] and element != 'H':
-                if (lig_resname != None and resname == lig_resname) or (lig_chain != None and chain == lig_chain) and element != 'H':
+                if (lig_resname is not None and resname == lig_resname) or (lig_chain is not None and chain == lig_chain) and element != 'H':
                     lig_atom_name = line[12:16].strip().strip('x')
                     lig_heavy_atoms.append([iatom, lig_atom_name])
                 else:
                     prt_heavy_atoms.append(iatom)
-            elif (lig_resname != None and resname == lig_resname) or (lig_chain != None and chain == lig_chain) and element != 'H':
+            elif (lig_resname is not None and resname == lig_resname) or (lig_chain is not None and chain == lig_chain) and element != 'H':
                 lig_atom_name = line[12:16].strip().strip('x')
                 lig_heavy_atoms.append([iatom, lig_atom_name])
 

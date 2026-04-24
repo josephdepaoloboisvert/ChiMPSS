@@ -4,8 +4,8 @@ CLI entry point for retroactive FultonMarket distance-matrix analysis.
 Console script: chimpss-retro-analysis
 """
 
-import os
 import argparse
+import os
 
 
 def parse_args():

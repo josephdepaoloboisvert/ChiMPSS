@@ -13,27 +13,26 @@ Usage examples:
       --resid_offset -33 --prefix gpcr_pca
 """
 
-import os
-import sys
-import json
 import argparse
 import datetime
+import json
+import os
+import sys
 
-import numpy as np
-import MDAnalysis as mda
 import joblib
+import MDAnalysis as mda
+import numpy as np
 
 from chimpss.analysis.gpcr_pca import (
-    Structure_Analyzer,
+    _imputation_setup,
+    _verbose_loadings_report,
+    _verbose_mapping_report,
+    _verbose_training_comparison,
     auto_detect_resid_offset,
+    build_mobile_ag,
     fetch_bw_map,
     map_conserved_resids,
-    build_mobile_ag,
-    _imputation_setup,
     project_trajectory,
-    _verbose_mapping_report,
-    _verbose_loadings_report,
-    _verbose_training_comparison,
 )
 
 

@@ -1,32 +1,22 @@
 # Package Imports
-import glob, itertools, jax, math, mpiplus, os
-from copy import deepcopy
-from datetime import datetime
-import matplotlib.pyplot as plt
-import mdtraj as md
-import netCDF4 as nc
+import os
+
+import mpiplus
 import numpy as np
-import jax.numpy as jnp
+import openmm.unit as unit
 from openmm import *
 from openmm.app import *
-import openmm.unit as unit
-from openmmtools import cache, states, mcmc, multistate
-from openmmtools.multistate import ParallelTemperingSampler, MultiStateReporter
-from openmmtools.states import SamplerState, ThermodynamicState
-from openmmtools.utils import get_fastest_platform
-from openmmtools.utils.utils import TrackedQuantity
-from pymbar import timeseries, MBAR
-from pymbar.timeseries import detect_equilibration
-import scipy.constants as cons
-import seaborn as sns
-from sklearn.decomposition import PCA
-from typing import List
+from openmmtools import mcmc
+from openmmtools.multistate import MultiStateReporter, ParallelTemperingSampler
 
-from chimpss.fultonmarket.utils import (
-    printf, build_sampler_states, truncate_ncdf,
-    _interpolate_new_states, _interpolate_new_positions,
-)
 from chimpss.fultonmarket.utils import *
+from chimpss.fultonmarket.utils import (
+    _interpolate_new_positions,
+    _interpolate_new_states,
+    build_sampler_states,
+    printf,
+    truncate_ncdf,
+)
 
 
 class Randolph():
@@ -111,10 +101,14 @@ class Randolph():
         pos_memmap, velos, box_vectors, states, energies, temperatures = truncate_ncdf(
             self.output_ncdf, ncdf_copy, save_no_dir, self.reporter, False
         )
-        np.save(os.path.join(save_no_dir, 'velocities.npy'), velos.data);       del velos
-        np.save(os.path.join(save_no_dir, 'box_vectors.npy'), box_vectors.data); del box_vectors
-        np.save(os.path.join(save_no_dir, 'states.npy'), states.data);           del states
-        np.save(os.path.join(save_no_dir, 'energies.npy'), energies.data);       del energies
+        np.save(os.path.join(save_no_dir, 'velocities.npy'), velos.data)
+        del velos
+        np.save(os.path.join(save_no_dir, 'box_vectors.npy'), box_vectors.data)
+        del box_vectors
+        np.save(os.path.join(save_no_dir, 'states.npy'), states.data)
+        del states
+        np.save(os.path.join(save_no_dir, 'energies.npy'), energies.data)
+        del energies
         np.save(os.path.join(save_no_dir, 'temperatures.npy'), temperatures)
 
         checkpoint_copy = os.path.join(self.output_dir, 'output_checkpoint_copy.ncdf')

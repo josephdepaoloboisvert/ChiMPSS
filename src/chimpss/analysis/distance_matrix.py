@@ -4,15 +4,17 @@ Consolidated distance matrix computation (torsion + CA + H-bond components).
 Migrated from DistanceMatrix/DistanceMatrix.py and DistanceMatrix/DistanceMatrixUtils.py.
 """
 
-import os
 import multiprocessing as mp
+import os
 from datetime import datetime
 from typing import List
 
-import numpy as np
 import mdtraj as md
+import numpy as np
 
-printf = lambda x: print(f"{datetime.now().strftime('%m/%d/%Y %H:%M:%S')}//{x}", flush=True)
+
+def printf(x):
+    print(f"{datetime.now().strftime('%m/%d/%Y %H:%M:%S')}//{x}", flush=True)
 
 
 class DistanceMatrix:

@@ -1,8 +1,6 @@
-import os, shutil
-import mdtraj as md
 import numpy as np
-from openmm.app import *
 from openmm import *
+from openmm.app import *
 from openmm.unit import *
 
 
@@ -16,7 +14,7 @@ def get_positions_from_pdb(fname_pdb, lig_resname: str=None):
     mem_heavy_atoms = []
     lig_heavy_atoms = []
     iatom = 0
-    
+
     for line in l_pdb[:-1]:
         if line[:6] in ['ATOM  ', 'HETATM']:
             resname = line[17:20]
@@ -31,12 +29,12 @@ def get_positions_from_pdb(fname_pdb, lig_resname: str=None):
             if line[17:20] in nameMembrane and words[-1] != 'H':
                 mem_heavy_atoms.append(iatom)
             elif line[:6] in ['ATOM  '] and words[-1] != 'H':
-                if lig_resname != None and resname == lig_resname and words[-1] != 'H':
+                if lig_resname is not None and resname == lig_resname and words[-1] != 'H':
                     lig_atom_name = line[12:16].strip().strip('x')
                     lig_heavy_atoms.append([iatom, lig_atom_name])
                 else:
                     prt_heavy_atoms.append(iatom)
-            elif lig_resname != None and resname == lig_resname and words[-1] != 'H':
+            elif lig_resname is not None and resname == lig_resname and words[-1] != 'H':
                 lig_atom_name = line[12:16].strip().strip('x')
                 lig_heavy_atoms.append([iatom, lig_atom_name])
 
@@ -69,7 +67,7 @@ def unpack_infiles(xml, pdb):
     return system, pdb.topology, pdb.positions
 
 def parse_atom_inds(atom_inds, parse_atom_names, find_atom_names):
-    
+
     parsed_atom_inds = np.empty(len(find_atom_names), dtype=int)
     for (atom_i, parse_atom_name) in zip(atom_inds, parse_atom_names):
         if parse_atom_name in find_atom_names:
@@ -79,7 +77,7 @@ def parse_atom_inds(atom_inds, parse_atom_names, find_atom_names):
     return parsed_atom_inds
 
 def minimize_from_sys(sys, top, pos, temp=300.0, dt=2.0):
-    
+
         integrator = LangevinIntegrator(temp*kelvin, 1/picosecond, dt*femtosecond)
         simulation = Simulation(top, sys, integrator)
         simulation.context.setPositions(pos)

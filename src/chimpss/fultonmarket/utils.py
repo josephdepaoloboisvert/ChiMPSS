@@ -1,40 +1,58 @@
-import glob, itertools, jax, math, mpiplus, os, sys, subprocess
-from copy import deepcopy
+import itertools
+import math
+import os
+import subprocess
+import sys
 from datetime import datetime
+from typing import List
+
+import jax
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import mdtraj as md
 import netCDF4 as nc
 import numpy as np
-import jax.numpy as jnp
+import openmm.unit as unit
+import scipy.constants as cons
 from openmm import *
 from openmm.app import *
-import openmm.unit as unit
 from openmmtools.states import SamplerState, ThermodynamicState
 from openmmtools.utils.utils import TrackedQuantity
-from pymbar import timeseries, MBAR
+from pymbar import MBAR
 from pymbar.timeseries import detect_equilibration
-import scipy.constants as cons
 from scipy.spatial.distance import jensenshannon
-from scipy.stats import pearsonr, spearmanr
-import seaborn as sns
 from sklearn.decomposition import PCA
-from typing import List, Literal
 
 from chimpss.fultonmarket.contact_network import ContactNetworkBuilder
 
 
-printf = lambda my_string: print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + ' // ' + str(my_string), flush=True)
-get_kT = lambda temp: temp*cons.gas_constant
-geometric_distribution = lambda min_val, max_val, n_vals: [min_val + (max_val - min_val) * (math.exp(float(i) / float(n_vals-1)) - 1.0) / (math.e - 1.0) for i in range(n_vals)]
+def printf(my_string):
+    print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + ' // ' + str(my_string), flush=True)
+
+
+def get_kT(temp):
+    return temp * cons.gas_constant
+
+
+def geometric_distribution(min_val, max_val, n_vals):
+    return [min_val + (max_val - min_val) * (math.exp(float(i) / float(n_vals-1)) - 1.0) / (math.e - 1.0)
+            for i in range(n_vals)]
+
 
 spring_constant_unit = (unit.joule)/(unit.angstrom*unit.angstrom*unit.mole)
 
-rmsd = lambda a, b: np.sqrt(np.mean(np.sum((b-a)**2, axis=-1), axis=-1))
-
 perms = jnp.array([x for x in itertools.product([-1, 0, 1], repeat=3)])
-jaxrmsd = lambda a, b: jnp.sqrt(jnp.mean(jnp.sum((b-a)**2, axis=-1), axis=-1))
-jax_add = lambda a, b: a+b
-jax_add = jax.vmap(jax_add, in_axes=(0, None))
+
+
+def jaxrmsd(a, b):
+    return jnp.sqrt(jnp.mean(jnp.sum((b-a)**2, axis=-1), axis=-1))
+
+
+def _jax_add_fn(a, b):
+    return a + b
+
+
+jax_add = jax.vmap(_jax_add_fn, in_axes=(0, None))
 rmsd_j = jax.vmap(jaxrmsd, in_axes=(0, None))
 
 def convert_to_TrackedQuantity(arr: np.array, u: openmm.unit):
@@ -107,13 +125,13 @@ def truncate_ncdf(ncdf_in, ncdf_out, out_dir, reporter, is_checkpoint: bool=Fals
         dest.createDimension(dim_name, (len(dim) if not dim.isunlimited() else None))
 
     for group_name, group in src.groups.items():
-        group = dest.createGroup(group_name)
+        dest.createGroup(group_name)
         for name, variable in src[group_name].variables.items():
             try:
                 dest[group_name].createVariable(name, variable.datatype, variable.dimensions)
                 dest[group_name][name][:] = src[group_name][name][:]
                 dest[group_name][name].setncatts(src[group_name][name].__dict__)
-            except:
+            except Exception:
                 print(group_name, name)
                 pass
 
@@ -147,7 +165,7 @@ def truncate_ncdf(ncdf_in, ncdf_out, out_dir, reporter, is_checkpoint: bool=Fals
 
         elif var_name == 'last_iteration':
             var_out[:] = var[:]
-            if is_checkpoint == False:
+            if not is_checkpoint:
                 mask_copy = var_out[:].copy()
                 var_out[:] = np.ma.array(9, mask=mask_copy.mask, fill_value=mask_copy.fill_value)
                 print(var_out)
@@ -215,14 +233,14 @@ def write_traj_from_pos_boxvecs(pos, box_vec, top, sele_str, receptor_sele_str='
     # Correct periodic issues
     prot_sele = traj.topology.select(receptor_sele_str) # receptor should always be chainid 0
     if sele_str is not None and correction:
-        if type(sele_str) == str:
+        if isinstance(sele_str, str):
             sele_str = [sele_str]
         lig_seles = []
         lig_coms = []
         for s in sele_str:
             try:
                 lig_sele = traj.topology.select(s)
-            except:
+            except Exception:
                 raise Exception(f'failed to parse {s}')
             lig_seles.append(lig_sele)
             lig_coms.append(md.compute_center_of_mass(traj.atom_slice(lig_sele)))
@@ -293,7 +311,7 @@ def resample_with_MBAR(objs: List, u_kln: np.array, N_k: np.array, size: int, re
         probs = np.nan_to_num(probs)
         try:
             resampled_inds = np.random.choice(range(len(probs)), size=size, replace=replace, p=probs)
-        except:
+        except Exception:
             resampled_inds = np.random.choice(range(len(probs)), size=len(np.where(probs > 0)[0]), replace=replace, p=probs)
 
     resampled_objs = []
@@ -353,7 +371,8 @@ def best_translation_by_unitcell_jax(cell_lengths, mobile_coords, target_coords)
 
 best_translation_by_unitcell_jax = jax.vmap(best_translation_by_unitcell_jax, in_axes=(0, 0, None))
 
-torsional_distance_on_period = lambda a, b, n: (1/n) * ( (180 - jnp.abs((jnp.mod(jnp.abs(n * (a - b)), 360)-180))))
+def torsional_distance_on_period(a, b, n):
+    return (1/n) * (180 - jnp.abs((jnp.mod(jnp.abs(n * (a - b)), 360)-180)))
 
 def get_angles_and_periods(traj):
     #Determine some torsions
@@ -379,7 +398,8 @@ def getTorsionalDistanceMatrix(traj, selection_string=None):
         traj = traj.atom_slice(traj.top.select(selection_string))
     angles, periods = get_angles_and_periods(traj)
     distance_matrix = jnp.empty((angles.shape[0], angles.shape[0]))
-    row_op = lambda angle_i, angle_is: jax.vmap(torsional_distance_on_period, in_axes=(None, 0, None))(angle_i, angle_is, periods)
+    def row_op(angle_i, angle_is):
+        return jax.vmap(torsional_distance_on_period, in_axes=(None, 0, None))(angle_i, angle_is, periods)
     #iterate over the rows, each pair is parallel across the GPU
     for i in range(angles.shape[0]):
         distance_matrix = distance_matrix.at[i, :].set(jnp.sqrt(jnp.mean((row_op(angles[i], angles))**2, axis=-1)))
@@ -396,8 +416,11 @@ def getAlphaCarbonDistanceMatrix(traj, selection_string=None):
     CA_pair_distances = md.compute_distances(traj, itertools.combinations(CA_inds, 2))
     distance_matrix = jnp.empty((CA_pair_distances.shape[0], CA_pair_distances.shape[0]))
 
-    ca_dist_func = lambda a, b: jnp.abs(b-a)
-    row_op = lambda dist_i, dist_is: jax.vmap(ca_dist_func, in_axes=(None, 0))(dist_i, dist_is)
+    def ca_dist_func(a, b):
+        return jnp.abs(b-a)
+
+    def row_op(dist_i, dist_is):
+        return jax.vmap(ca_dist_func, in_axes=(None, 0))(dist_i, dist_is)
     #iterate over the rows, each pair is parallel across the GPU
     for i in range(CA_pair_distances.shape[0]):
         distance_matrix = distance_matrix.at[i, :].set(jnp.sqrt(jnp.mean((row_op(CA_pair_distances[i], CA_pair_distances))**2, axis=-1)))
@@ -486,8 +509,11 @@ def getContactDistanceMatrix(top_fn, traj_fn, output_fn, conda_env=None, getcont
                                                  pdb_fn=top_fn,
                                                  token_mode='residue_atomclass').get_contact_vectors()
     X = X.astype(jnp.int8)
-    contact_dist_func = lambda a, b: jnp.mean(jnp.abs(b-a)) #All zero where equal, all one where not, return percentage
-    row_op = lambda cont_i, cont_is: jax.vmap(contact_dist_func, in_axes=(None, 0))(cont_i, cont_is)
+    def contact_dist_func(a, b):
+        return jnp.mean(jnp.abs(b-a))  # All zero where equal, all one where not, return percentage
+
+    def row_op(cont_i, cont_is):
+        return jax.vmap(contact_dist_func, in_axes=(None, 0))(cont_i, cont_is)
     matrix = jax.vmap(row_op, in_axes=(0,None))(X, X)
 
     return matrix, features

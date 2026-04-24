@@ -1,20 +1,21 @@
 #MotorRow
-import os, shutil
+import math
+import os
+import shutil
+from datetime import datetime
+
 import mdtraj as md
 import numpy as np
-from openmm.app import *
 from openmm import *
+from openmm.app import *
 from openmm.unit import *
-from datetime import datetime
+
 from chimpss.motorrow.utils import (
     get_positions_from_pdb,
     restrain_atoms,
     unpack_infiles,
-    parse_atom_inds,
-    minimize_from_sys,
 )
-from typing import List
-import math
+
 
 class MotorRow():
     """
@@ -69,7 +70,7 @@ class MotorRow():
         pdb = PDBFile(pdb_file)
         self.topology = pdb.topology
         self.lig_resname = lig_resname
-        if lig_chain != None:
+        if lig_chain is not None:
             lig_chain = lig_chain.strip()
         self.lig_chain = lig_chain
 
@@ -213,11 +214,11 @@ class MotorRow():
         print(f'Minimization completed in {end}')
 
         if pdb_out is None:
-            pdb_out = os.path.join(self.abs_work_dir, f'minimized.pdb')
+            pdb_out = os.path.join(self.abs_work_dir, 'minimized.pdb')
         self._write_structure(simulation, pdb_out)
 
         if state_xml_out is None:
-            state_xml_out = os.path.join(self.abs_work_dir, f'minimized.xml')
+            state_xml_out = os.path.join(self.abs_work_dir, 'minimized.xml')
         self._write_state(simulation, state_xml_out)
 
         return state_xml_out, pdb_out

@@ -1,38 +1,20 @@
-import textwrap, sys, os, glob, shutil
 import numpy as np
-import MDAnalysis as mda
-from MDAnalysis.analysis.align import alignto
-from MDAnalysis.analysis.rms import rmsd
-from MDAnalysis.analysis.bat import BAT
-from MDAnalysis.lib.distances import calc_dihedrals
-from MDAnalysis.coordinates.PDB import PDBWriter
-import mdtraj as md
-from pdbfixer import PDBFixer
-from openbabel import openbabel
-from datetime import datetime
-#OpenFF
-import openff
-import openff.units
-import openff.toolkit
-import openff.interchange
+from openmm import *
 
+#OpenFF
 #OpenMM
 from openmm.app import *
-from openmm import *
 from openmm.unit import *
+
 #rdkit
-from rdkit import Chem
-from rdkit.Chem import Draw, AllChem
-from rdkit.Chem import rdFMCS
 from rdkit.Chem.Draw import rdDepictor
+
 rdDepictor.SetPreferCoordGen(True)
 try:
     from rdkit.Chem.Draw import IPythonConsole
     IPythonConsole.drawOptions.minFontSize = 20
-    from IPython.display import display
 except Exception:
     pass
-from typing import List
 
 
 def write_FASTA(sequence, name, fasta_path):
@@ -41,7 +23,7 @@ def write_FASTA(sequence, name, fasta_path):
     FASTA = f""">P1;{name}
                  sequence; {name}:::::::::
                  {sequence}*"""
-    
+
     with open(fasta_path, 'w') as f:
         f.write(FASTA)
         f.close()
@@ -51,7 +33,7 @@ def write_FASTA(sequence, name, fasta_path):
 def change_resname(pdb_file_in, pdb_file_out, resname_in, resname_out):
     """
     Changes a resname in a pdb file by changing all occurences of resname_in to resname_out
-    
+
     """
 
     with open(pdb_file_in, 'r') as f:
@@ -100,7 +82,7 @@ def describe_state(state: State, name: str = "State"):
 #         2. Write corresponding CRYST1 line
 #         3. Identify atoms outside of box
 #         4. Identify corresponding resnames and resids outside of box
-#         5. Remove residues outside of box 
+#         5. Remove residues outside of box
 #         6. Overwrite original file ('pdb' parameter)
 
 #     Parameters:
@@ -109,7 +91,7 @@ def describe_state(state: State, name: str = "State"):
 #             String path to pdb file to trim.
 
 #         padding (float):
-#             Amount of padding (Angstrom) to trim to. Default is 15 Angstrom to accomodate the default 10 Angstrom NonBondededForce cutoff.     
+#             Amount of padding (Angstrom) to trim to. Default is 15 Angstrom to accomodate the default 10 Angstrom NonBondededForce cutoff.
 #     """
 
 #     # Get protein dimensions
@@ -120,13 +102,13 @@ def describe_state(state: State, name: str = "State"):
 #     deltas = np.subtract(max_coords, min_coords)
 #     print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//Identified new box size:', deltas, flush=True)
 
-    
+
 #     # Write CRYST1 line
 #     temp_crys_pdb = 'temp_crys.pdb'
 #     writer = PDBWriter(temp_crys_pdb)
 #     writer.CRYST1(list(deltas) + [90, 90, 90])
 #     writer.close()
-    
+
 #     cryst1_line = open(temp_crys_pdb, 'r').readlines()[0]
 #     print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//Writing new CRYST1 line:', cryst1_line[:-2], flush=True)
 #     os.remove(temp_crys_pdb)
@@ -150,10 +132,10 @@ def describe_state(state: State, name: str = "State"):
 #             x = float(line[31:38])
 #             y = float(line[39:46])
 #             z = float(line[47:54])
-            
+
 #             if x > max_coords[0] or y > max_coords[1] or z > max_coords[2]:
 #                 remove_residues.append([resname, chain, resid, key])
-                 
+
 #             elif x < min_coords[0] or y < min_coords[1] or z < min_coords[2]:
 #                 remove_residues.append([resname, chain, resid, key])
 
@@ -163,7 +145,7 @@ def describe_state(state: State, name: str = "State"):
 #     remove_chains = np.array(remove_residues)[:,1]
 #     remove_resids = np.array(remove_residues)[:,2]
 #     keys = np.array(remove_residues)[:,3]
-        
+
 #     # Remove lines
 #     write_lines = []
 #     for line in lines:
@@ -177,16 +159,16 @@ def describe_state(state: State, name: str = "State"):
 #                 inds1 = np.where(remove_resnames == resname)[0]
 #                 inds2 = np.where(remove_resids == resid)[0]
 #                 inds3 = np.where(remove_chains == chain)[0]
-            
+
 #                 cross = np.intersect1d(inds1, inds2)
 #                 cross = np.intersect1d(inds3, cross)
-                
+
 #                 if len(cross) == 0 or key not in keys[cross]:
 #                     write_lines.append(line)
 #                 elif resname == 'HOH' and (x-1 < max_coords[0] and y-1 < max_coords[1] and z-1 < max_coords[2]) and (x+1 > min_coords[0] and y+1 > min_coords[1] and z+1 > min_coords[2]):
 #                     write_lines.append(line)
 
-                
+
 #             else:
 #                 write_lines.append(line)
 #         else:

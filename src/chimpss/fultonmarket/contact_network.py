@@ -1,16 +1,16 @@
-import os
 import math
+import os
 import subprocess
 from collections import Counter, defaultdict
 from datetime import datetime
 from typing import List, Literal
 
 import mdtraj as md
-import numpy as np
 from sklearn.preprocessing import MultiLabelBinarizer
 
 
-printf = lambda x: print(f"{datetime.now().strftime('%m/%d/%Y %H:%M:%S')}//{x}", flush=True)
+def printf(x):
+    print(f"{datetime.now().strftime('%m/%d/%Y %H:%M:%S')}//{x}", flush=True)
 
 # Interaction subtypes emitted by GetContacts TSV that belong to the hbond family
 _HB_FAMILY           = {"hb", "hbbb", "hbsb", "hbss", "hblb", "hbls"}

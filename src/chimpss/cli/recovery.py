@@ -7,13 +7,12 @@ NCDF to the last complete checkpoint so that chimpss-fultonmarket can resume.
 Console script: chimpss-recovery
 """
 
-import os
 import argparse
+import os
 import random
 import string
 
 import numpy as np
-import netCDF4 as nc
 from openmmtools.multistate import MultiStateReporter
 
 

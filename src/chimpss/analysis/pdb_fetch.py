@@ -5,8 +5,8 @@ CLI entry point: chimpss-fetch-pdbs  (src/chimpss/cli/fetch_pdbs.py)
 """
 
 import sys
+
 import requests
-from collections import Counter
 
 GPCRDB = "https://gpcrdb.org"
 TIMEOUT = 60

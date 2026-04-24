@@ -6,7 +6,6 @@ only the reusable classes and functions are included here.
 """
 
 import os
-import multiprocessing as mp
 
 import MDAnalysis as mda
 import numpy as np

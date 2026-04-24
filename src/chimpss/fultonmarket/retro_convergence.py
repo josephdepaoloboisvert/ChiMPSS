@@ -6,13 +6,14 @@ FultonMarketAnalysis.retro_convergence_report. Not intended for direct use.
 """
 
 import os
-import tempfile
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 
-printf = lambda x: print(f"{datetime.now().strftime('%m/%d/%Y %H:%M:%S')}//{x}", flush=True)
+
+def printf(x):
+    print(f"{datetime.now().strftime('%m/%d/%Y %H:%M:%S')}//{x}", flush=True)
 
 MATRIX_NAMES = ('torsion', 'alpha_carbon', 'contact')
 
@@ -128,19 +129,23 @@ def compute_distance_matrices(
     resampled MDTraj trajectory.
     """
     from chimpss.fultonmarket.utils import (
-        getTorsionalDistanceMatrix,
         getAlphaCarbonDistanceMatrix,
         getContactDistanceMatrix,
+        getTorsionalDistanceMatrix,
     )
 
     torsional    = getTorsionalDistanceMatrix(traj, selection_string='protein or resname UNK')
     alpha_carbon = getAlphaCarbonDistanceMatrix(traj, selection_string='protein or resname UNK')
 
     contact_kwargs = dict(top_fn=pdb_out, traj_fn=dcd_out, output_fn=contacts_tsv)
-    if getcontacts_script  is not None: contact_kwargs['getcontacts_script']  = getcontacts_script
-    if conda_env           is not None: contact_kwargs['conda_env']           = conda_env
-    if getcontacts_python  is not None: contact_kwargs['getcontacts_python']  = getcontacts_python
-    if _printf             is not None: contact_kwargs['_printf']             = _printf
+    if getcontacts_script is not None:
+        contact_kwargs['getcontacts_script'] = getcontacts_script
+    if conda_env is not None:
+        contact_kwargs['conda_env'] = conda_env
+    if getcontacts_python is not None:
+        contact_kwargs['getcontacts_python'] = getcontacts_python
+    if _printf is not None:
+        contact_kwargs['_printf'] = _printf
 
     contact_distance, _ = getContactDistanceMatrix(**contact_kwargs)
 
@@ -274,7 +279,7 @@ def print_summary_table(report: Dict[int, Dict[str, bool]], total_n_sims: int, _
 
     sim_nos    = sorted(report.keys())
     all_labels = list(report[sim_nos[0]].keys())
-    col_width  = max(len(l) for l in all_labels)
+    col_width  = max(len(lbl) for lbl in all_labels)
     sim_width  = 8
     sep        = '=' * (col_width + sim_width * len(sim_nos) + 4)
 

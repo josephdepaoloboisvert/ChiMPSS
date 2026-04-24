@@ -11,13 +11,16 @@ Usage examples:
   chimpss-fetch-pdbs --list_families
 """
 
-import sys
 import argparse
+import sys
 from collections import Counter
 
 from chimpss.analysis.pdb_fetch import (
-    GPCRDB, TIMEOUT, get,
-    fetch_family_proteins, list_families, classify_method,
+    GPCRDB,
+    classify_method,
+    fetch_family_proteins,
+    get,
+    list_families,
 )
 
 
@@ -109,7 +112,7 @@ def main():
                 continue
         kept.append(s)
 
-    print(f"\nFilter summary:")
+    print("\nFilter summary:")
     print(f"  {'Total fetched':<30}: {len(all_structures)}")
     for reason, n in sorted(drop_reasons.items(), key=lambda x: -x[1]):
         print(f"  {'Dropped — ' + reason:<30}: {n}")
@@ -118,18 +121,18 @@ def main():
 
     if kept:
         states = Counter(s.get('state') or 'Unknown' for s in kept)
-        print(f"\n  State breakdown:")
+        print("\n  State breakdown:")
         for state, n in sorted(states.items()):
             print(f"    {state:<20}: {n}")
 
         methods = Counter(classify_method(s) for s in kept)
-        print(f"\n  Method breakdown:")
+        print("\n  Method breakdown:")
         for method, n in sorted(methods.items()):
             print(f"    {method:<20}: {n}")
 
         if not use_species:
             species = Counter(s.get('species') or 'Unknown' for s in kept)
-            print(f"\n  Species breakdown (top 5):")
+            print("\n  Species breakdown (top 5):")
             for sp, n in species.most_common(5):
                 print(f"    {sp:<30}: {n}")
 

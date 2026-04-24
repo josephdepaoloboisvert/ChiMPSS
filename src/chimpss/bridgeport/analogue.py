@@ -1,17 +1,13 @@
-import textwrap, sys, os, glob, shutil
-import numpy as np
+import os
+from datetime import datetime
+
 import MDAnalysis as mda
 from MDAnalysis.analysis.align import alignto
 from MDAnalysis.analysis.rms import rmsd
-from MDAnalysis.analysis.bat import BAT
-from MDAnalysis.lib.distances import calc_dihedrals
-from MDAnalysis.coordinates.PDB import PDBWriter
-import mdtraj as md
-from datetime import datetime
 from rdkit import Chem
-from rdkit.Chem import Draw, AllChem
-from rdkit.Chem import rdFMCS
+from rdkit.Chem import Draw
 from rdkit.Chem.Draw import rdDepictor
+
 rdDepictor.SetPreferCoordGen(True)
 try:
     from rdkit.Chem.Draw import IPythonConsole
@@ -19,21 +15,22 @@ try:
     from IPython.display import display
 except Exception:
     pass
-from typing import List
-from copy import deepcopy
 import warnings
+from copy import deepcopy
+from typing import List
+
 warnings.filterwarnings("ignore")
-from chimpss.bridgeport.ligand import Ligand
-from chimpss.bridgeport.ligand_utils import *
 import py3Dmol
 
+from chimpss.bridgeport.ligand import Ligand
+from chimpss.bridgeport.ligand_utils import *
 
 
 class Analogue(Ligand):
     """
     """
 
-    def __init__(self, template: Ligand, working_dir: str, name: str, 
+    def __init__(self, template: Ligand, working_dir: str, name: str,
                      resname: str=False, smiles: str=False,
                      chainid: str=False, sequence: str=False,
                      verbose: bool=False, visualize: bool=True):
@@ -50,9 +47,9 @@ class Analogue(Ligand):
         if not os.path.exists(self.conformer_dir):
             os.mkdir(self.conformer_dir)
 
-    
 
-    def get_MCS(self, 
+
+    def get_MCS(self,
                 subImgSize: tuple=(600,600),
                 add_atoms: List[List[int]]=None,
                 remove_atoms: List[int]=None,
@@ -77,14 +74,14 @@ class Analogue(Ligand):
                                   removeHs=self.removeHs,
                                   proximityBonding=self.proximityBonding)
         print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//Created analogue', self.name, 'from smiles:', self.smiles , flush=True)
-        
+
         template_mol = self.template.return_rdkit_mol(from_pdb=True,
                           from_smiles=False,
                           sanitize=True,
                           removeHs=False,
                           proximityBonding=True)
         print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//Created known ligand', self.template.name, 'from smiles:', self.template.smiles , flush=True)
-        
+
         # Detect MCS
         self.strict = strict
         self._detect_MCS(mol, template_mol)
@@ -98,7 +95,7 @@ class Analogue(Ligand):
         # Add user specified atoms
         if add_atoms is not None:
             self._add_atoms_to_MCS(add_atoms)
-            
+
         # Print matching atoms
         if self.verbose:
             print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//Found matching inds:', flush=True)
@@ -117,7 +114,7 @@ class Analogue(Ligand):
                                          highlightAtomLists=[self.matching_inds, self.template_matching_inds],
                                          drawOptions=dopts))
 
-    
+
 
     def generate_conformers(self, n_conformers: int=1, align_all: bool=False, rmsd_thresh: float=3.0):
         """
@@ -130,9 +127,9 @@ class Analogue(Ligand):
         if align_all:
             self.align_inds = deepcopy(self.matching_inds)
             self.template_align_inds = deepcopy(self.template_matching_inds)
-            
+
         self._get_MDA_atoms()
-        
+
 
         # Iterate for the n_conformers
         n=0
@@ -141,7 +138,7 @@ class Analogue(Ligand):
 
             # Generate conformer
             self._load_molecules()
-            
+
             # Make selections
             self._make_selections()
 
@@ -182,17 +179,17 @@ class Analogue(Ligand):
         Return indices of maximum common substructure between two rdkit molecules
 
         mol1 should be analogue, mol2 should be template
-        
+
         """
-        
+
         # Get MCS
         self.align_inds, self.template_align_inds = get_rdkit_MCS(mol1, mol2, strict=self.strict)
-        
+
         # Set final attributes
         self.mol = mol1
-        self.template_mol = mol2 
+        self.template_mol = mol2
 
-    
+
     def _load_molecules(self, load_template: bool=False):
         """
         """
@@ -207,11 +204,11 @@ class Analogue(Ligand):
                                                                sanitize=True,
                                                                removeHs=False, # Changed to False for MutatedPeptide to work, proceed w/ caution
                                                                proximityBonding=True)
-        
+
             # Load with MDAnalysis
             self.template_sele = self.template.return_MDA_sele()
 
-    
+
 
     def _get_MDA_atoms(self):
         """
@@ -226,11 +223,11 @@ class Analogue(Ligand):
 
 
 
-    
+
     def _add_atoms_to_MCS(self, add_atoms):
         """
         """
-        
+
         # Add atoms
         for atom, temp_atom in add_atoms:
 
@@ -239,7 +236,7 @@ class Analogue(Ligand):
                 self.template_matching_inds.append(temp_atom)
 
 
-    
+
     def _remove_atoms_from_MCS(self, remove_atoms):
         """
         """
@@ -248,16 +245,16 @@ class Analogue(Ligand):
 
             # See if already in there
             if atom in self.matching_inds:
-            
+
                 # Find atoms
                 atom_ind = self.matching_inds.index(atom)
-    
+
                 # Remove
                 self.matching_inds.pop(atom_ind)
                 self.template_matching_inds.pop(atom_ind)
 
 
-    
+
     def _make_selections(self):
         """
         """
@@ -281,5 +278,4 @@ class Analogue(Ligand):
         view.setStyle({'model':1}, {'stick': {'colorscheme':'yellowCarbon'}})
         view.zoomTo()
         view.show()
-        
-            
+

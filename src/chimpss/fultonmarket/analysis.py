@@ -1,22 +1,16 @@
-import glob, itertools, jax, math, mpiplus, os, sys
+import glob
+import os
+import sys
 from copy import deepcopy
-from datetime import datetime
+from typing import Dict, List, Tuple
+
+import jax
 import matplotlib.pyplot as plt
 import mdtraj as md
-import netCDF4 as nc
 import numpy as np
-import jax.numpy as jnp
+import seaborn as sns
 from openmm import *
 from openmm.app import *
-import openmm.unit as unit
-from openmmtools.states import SamplerState, ThermodynamicState
-from openmmtools.utils.utils import TrackedQuantity
-from pymbar import timeseries, MBAR
-from pymbar.timeseries import detect_equilibration
-import scipy.constants as cons
-import seaborn as sns
-from sklearn.decomposition import PCA
-from typing import List, Dict, Tuple
 
 from chimpss.fultonmarket.utils import *
 
@@ -360,9 +354,10 @@ class FultonMarketAnalysis():
         """
         import json
         import tempfile
+
+        import joblib
         import MDAnalysis as mda
         from MDAnalysis.coordinates.memory import MemoryReader
-        import joblib
 
         # Locate the repo root (src/chimpss/fultonmarket/analysis.py -> go up 4 levels)
         _repo_root = os.path.dirname(
@@ -376,10 +371,10 @@ class FultonMarketAnalysis():
             sys.path.insert(0, _repo_root)
 
         from project_pca_gpcrs import (
+            _imputation_setup,
+            build_mobile_ag,
             fetch_bw_map,
             map_conserved_resids,
-            build_mobile_ag,
-            _imputation_setup,
             project_trajectory,
         )
 
@@ -756,12 +751,17 @@ class FultonMarketAnalysis():
         getcontacts_python: str = None,
     ) -> Dict[int, dict]:
         """Retroactively compute and save resampled distance matrices for all sub-simulations."""
-        from chimpss.fultonmarket.retro_convergence import (
-            resolve_write_dir, resolve_cache_dir, resolve_traj_paths,
-            load_matrices, save_matrices,
-            compute_distance_matrices, log_mode,
-        )
         import tempfile
+
+        from chimpss.fultonmarket.retro_convergence import (
+            compute_distance_matrices,
+            load_matrices,
+            log_mode,
+            resolve_cache_dir,
+            resolve_traj_paths,
+            resolve_write_dir,
+            save_matrices,
+        )
 
         available = sorted(int(d.split('/')[-1]) for d in self.storage_dirs)
         targets   = sim_nos if sim_nos is not None else available
@@ -846,7 +846,8 @@ class FultonMarketAnalysis():
 
             except Exception as exc:
                 self._printf(f'ERROR: sim_no={sim_no} failed: {exc}', level='minimal')
-                import traceback; traceback.print_exc()
+                import traceback
+                traceback.print_exc()
 
         self.energies = full_energies
         self.map      = full_map
@@ -874,14 +875,21 @@ class FultonMarketAnalysis():
         getcontacts_python: str = None,
     ) -> Tuple[Dict[int, Dict[str, bool]], Dict[int, dict]]:
         """Evaluate convergence checks as a function of simulation progress."""
-        from chimpss.fultonmarket.retro_convergence import (
-            resolve_write_dir, resolve_cache_dir, resolve_traj_paths,
-            load_matrices, save_matrices,
-            compute_distance_matrices,
-            evaluate_matrix_convergence, build_checks,
-            print_sim_report, print_summary_table, log_mode,
-        )
         import tempfile
+
+        from chimpss.fultonmarket.retro_convergence import (
+            build_checks,
+            compute_distance_matrices,
+            evaluate_matrix_convergence,
+            load_matrices,
+            log_mode,
+            print_sim_report,
+            print_summary_table,
+            resolve_cache_dir,
+            resolve_traj_paths,
+            resolve_write_dir,
+            save_matrices,
+        )
 
         total_n_sims = len(self.storage_dirs)
         available    = sorted(int(d.split('/')[-1]) for d in self.storage_dirs)
@@ -938,7 +946,7 @@ class FultonMarketAnalysis():
                 first_valid_sim_no   = int((1.0 - effective_post_equil) * sim_no)
 
                 if sim_no not in matrix_cache:
-                    self._printf(f'  computing distance matrices on-the-fly', level='all')
+                    self._printf('  computing distance matrices on-the-fly', level='all')
 
                     self.importance_resampling(n_samples=n_resample)
 
@@ -1039,7 +1047,8 @@ class FultonMarketAnalysis():
 
             except Exception as exc:
                 self._printf(f'ERROR: sim_no={sim_no} failed: {exc}', level='minimal')
-                import traceback; traceback.print_exc()
+                import traceback
+                traceback.print_exc()
 
         self.energies = full_energies
         self.map      = full_map

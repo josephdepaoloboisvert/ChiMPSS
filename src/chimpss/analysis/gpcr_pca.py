@@ -12,16 +12,15 @@ CLI entry points:
   chimpss-project-pca   →  src/chimpss/cli/project_pca.py
 """
 
+import json
 import os
 import sys
-import json
-import datetime
-import requests
-import numpy as np
-import MDAnalysis as mda
-from MDAnalysis.analysis import align
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import MDAnalysis as mda
+import numpy as np
+import requests
+from MDAnalysis.analysis import align
 
 # ── amino acid conversion ─────────────────────────────────────────────────────
 
@@ -31,7 +30,8 @@ _THREE2ONE = {
     'LEU': 'L', 'LYS': 'K', 'MET': 'M', 'PHE': 'F', 'PRO': 'P',
     'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V',
 }
-three_to_one = lambda x: _THREE2ONE.get(x, 'X')
+def three_to_one(x):
+    return _THREE2ONE.get(x, 'X')
 
 _MD_RESNAME_NORM = {
     'HID': 'HIS', 'HIE': 'HIS', 'HIP': 'HIS',
@@ -362,16 +362,16 @@ def _parse_bw_list(spec):
     labels = [tok.strip() for tok in text.replace(',', ' ').split()
               if tok.strip()]
 
-    bad = [l for l in labels if '.' not in l or len(l.split('.')) != 2]
+    bad = [lbl for lbl in labels if '.' not in lbl or len(lbl.split('.')) != 2]
     if bad:
         raise ValueError(
             f"Malformed BW labels (expected 'H.PP' format): {bad}")
 
-    non_standard = [l for l in labels if not is_standard_bw(l)]
+    non_standard = [lbl for lbl in labels if not is_standard_bw(lbl)]
     if non_standard:
         print(f"  WARNING: dropping {len(non_standard)} non-standard labels "
               f"(multi-digit helix): {non_standard}")
-    labels = [l for l in labels if is_standard_bw(l)]
+    labels = [lbl for lbl in labels if is_standard_bw(lbl)]
     return sorted(labels, key=_bw_sort_key)
 
 
@@ -409,7 +409,7 @@ def auto_detect_resid_offset(u, analyzer, chain=None, user_offset=0):
     traj_min    = int(bb_residues.resids.min())
     traj_max    = int(bb_residues.resids.max())
 
-    print(f"Auto-detecting resid offset...")
+    print("Auto-detecting resid offset...")
     print(f"  Trajectory sequence : {len(traj_seq)} residues "
           f"(resids {traj_min}–{traj_max})")
     gmin, gmax = min(gpcrdb_seq), max(gpcrdb_seq)
@@ -569,7 +569,6 @@ def project_trajectory(u, mobile_ag, ref_ag, pca,
                 print(f"  {i + 1}/{n_frames}", end='\r', flush=True)
     else:
         present_feat_idx     = imputation['present_feat_idx']
-        missing_feat_idx     = imputation['missing_feat_idx']
         trimmed_ref_atom_idx = imputation['trimmed_ref_atom_idx']
         trimmed_ref_ag       = ref_ag[trimmed_ref_atom_idx]
         n_features           = pca.mean_.shape[0]
@@ -676,7 +675,7 @@ def _verbose_training_comparison(projections, meta, prefix):
                           for k in range(n_pcs_show))
     print(f"  {'YOUR TRAJ':>14}  {len(projections):>5}  {pc_cols}")
 
-    print(f"\n  Euclidean distance from trajectory mean to each state centroid (PC1–PC2):")
+    print("\n  Euclidean distance from trajectory mean to each state centroid (PC1–PC2):")
     dists = {state: np.linalg.norm(traj_mean[:2] - cent[:2])
              for state, cent in centroids.items()}
     for state, dist in sorted(dists.items(), key=lambda x: x[1]):

@@ -1,20 +1,22 @@
 #MotorRow
-import os, shutil, sys
-import mdtraj as md
-import numpy as np
-from openmm.app import *
-from openmm import *
-from openmm.unit import *
+import os
+import shutil
 from datetime import datetime
-from chimpss.bridgeport.minimizer_utils import *
 from typing import List
-import math
+
+import numpy as np
+from openmm import *
+from openmm.app import *
+from openmm.unit import *
+
+from chimpss.bridgeport.minimizer_utils import *
+
 
 class Minimizer():
     """
- 
+
     """
-    
+
     def __init__(self, system_xml, pdb_file, working_directory):
         """
         Parse the xml into an openmm system; sets the self.system attribute from the xml file; sets the self.topology attribute from pdb_file
@@ -43,18 +45,18 @@ class Minimizer():
             system_xml = os.path.join(self.abs_work_dir, system_xml)
 
         self.system_xml = system_xml
-        
+
         #Get the pdbfile, store the topology (and initial positions i guess)
         if os.path.isabs(pdb_file):
             pass
         else:
             shutil.copy(pdb_file, os.path.join(self.abs_work_dir, pdb_file))
             pdb_file = os.path.join(self.abs_work_dir, pdb_file)
-        
+
         pdb = PDBFile(pdb_file)
         self.topology = pdb.topology
 
-        
+
     def main(self, pdb_in):
         """
         Run the standard five step equilibration
@@ -78,12 +80,12 @@ class Minimizer():
         else:
             shutil.copy(pdb_in, os.path.join(self.abs_work_dir, pdb_in))
             pdb_in = os.path.join(self.abs_work_dir, pdb_in)
-        
+
         #Minimize
         state_fn, pdb_fn = self._minimize(pdb_in)
-        
+
         return state_fn, pdb_fn
-    
+
 
     def _describe_state(self, sim: Simulation, name: str = "State"):
         """
@@ -97,8 +99,8 @@ class Minimizer():
         self.PE = round(state.getPotentialEnergy()._value, 2)
         max_force = round(max(np.sqrt(v.x**2 + v.y**2 + v.z**2) for v in state.getForces()), 2)
         print(f"{name} has energy {self.PE} kJ/mol ", f"with maximum force {max_force} kJ/(mol nm)")
-      
-        
+
+
     def _write_state(self, sim: Simulation, xml_fn: str):
         """
         Serialize the State of an OpenMM Simulation to an XML file.
@@ -112,8 +114,8 @@ class Minimizer():
         with open(xml_fn, 'w') as f:
             f.write(contents)
         print(f'Wrote: {xml_fn}')
- 
-    
+
+
     def _write_system(self, sim: Simulation, xml_fn: str):
         """
         Serialize the System of an OpenMM Simulation to an XML file.
@@ -138,23 +140,23 @@ class Minimizer():
         with open(pdb_fn, 'w') as f:
             PDBFile.writeFile(sim.topology, sim.context.getState(getPositions=True).getPositions(), f, keepIds=True)
         print(f'Wrote: {pdb_fn}')
-        
+
 
     def _minimize(self, pdb_in:str, pdb_out:str=None, state_xml_out:str=None, temp=300.0, dt=2.0, lig_resname: str=None, mcs: List[str]=None, fc_pos: float=40.0):
         """
         Minimizes the structure of pdb_in
-        
+
         Parameters:
             pdb_in - the structure to be minimized
-        
+
         Returns:
             pdb_out - FilePath to the output structure
         """
         start = datetime.now()
         system, _, positions = unpack_infiles(self.system_xml, pdb_in)
 
-        # Add restraint if specified 
-        if mcs != None and lig_resname != None:
+        # Add restraint if specified
+        if mcs is not None and lig_resname is not None:
             crds, prt_heavy_atoms, mem_heavy_atoms, lig_heavy_atoms = get_positions_from_pdb(pdb_in, lig_resname=lig_resname)
             lig_heavy_atom_inds = np.array(lig_heavy_atoms)[:,0].astype(int)
             lig_heavy_atom_names = np.array(lig_heavy_atoms)[:,1]
@@ -162,7 +164,7 @@ class Minimizer():
 
             system = restrain_atoms(system, crds, prt_heavy_atoms, fc_pos)
             system = restrain_atoms(system, crds, mem_heavy_atoms, fc_pos)
-            system = restrain_atoms(system, crds, mcs_atom_inds, fc_pos) 
+            system = restrain_atoms(system, crds, mcs_atom_inds, fc_pos)
 
         integrator = LangevinIntegrator(temp*kelvin, 1/picosecond, dt*femtosecond)
         simulation = Simulation(self.topology, system, integrator)
@@ -172,14 +174,14 @@ class Minimizer():
         self._describe_state(simulation, "Minimized state")
         end = datetime.now() - start
         print(f'Minimization completed in {end}')
-        
+
         if pdb_out is None:
-            pdb_out = os.path.join(self.abs_work_dir, f'minimized.pdb')
+            pdb_out = os.path.join(self.abs_work_dir, 'minimized.pdb')
         self._write_structure(simulation, pdb_out)
 
         if state_xml_out is None:
-            state_xml_out = os.path.join(self.abs_work_dir, f'minimized.xml')
+            state_xml_out = os.path.join(self.abs_work_dir, 'minimized.xml')
         self._write_state(simulation, state_xml_out)
-            
+
         return state_xml_out, pdb_out
 
