@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 from datetime import datetime
+from typing import List
 
 import MDAnalysis as mda
 import mdtraj as md

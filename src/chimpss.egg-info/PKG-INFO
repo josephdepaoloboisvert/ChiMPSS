@@ -3,24 +3,6 @@ Name: chimpss
 Version: 0.1.0
 Summary: Chicago Membrane Protein Simulation Suite — 3-stage MD pipeline (Bridgeport → MotorRow → FultonMarket)
 Requires-Python: >=3.8
-Requires-Dist: openmm
-Requires-Dist: openmmtools
-Requires-Dist: mdtraj
-Requires-Dist: MDAnalysis
-Requires-Dist: pdbfixer
-Requires-Dist: parmed
-Requires-Dist: pdb2pqr
-Requires-Dist: pymbar
-Requires-Dist: mpiplus
-Requires-Dist: rdkit
-Requires-Dist: openff-toolkit
-Requires-Dist: numpy
-Requires-Dist: scipy
-Requires-Dist: scikit-learn
-Requires-Dist: jax
-Requires-Dist: seaborn
-Requires-Dist: netCDF4
-Requires-Dist: py3dmol
 Provides-Extra: dev
 Requires-Dist: pytest; extra == "dev"
 Requires-Dist: pytest-cov; extra == "dev"

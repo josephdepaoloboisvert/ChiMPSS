@@ -1,21 +1,3 @@
-openmm
-openmmtools
-mdtraj
-MDAnalysis
-pdbfixer
-parmed
-pdb2pqr
-pymbar
-mpiplus
-rdkit
-openff-toolkit
-numpy
-scipy
-scikit-learn
-jax
-seaborn
-netCDF4
-py3dmol
 
 [dev]
 pytest
