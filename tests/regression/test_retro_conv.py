@@ -16,6 +16,7 @@ Run with:
         --pdb /path/to/receptor.pdb
 """
 import os
+
 import pytest
 
 openmm = pytest.importorskip("openmm",  reason="openmm not installed")

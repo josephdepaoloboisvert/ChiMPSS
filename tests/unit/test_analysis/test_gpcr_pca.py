@@ -10,16 +10,14 @@ import pytest
 pytest.importorskip("MDAnalysis", reason="MDAnalysis not installed — skipping gpcr_pca tests")
 
 from chimpss.analysis.gpcr_pca import (
-    _THREE2ONE,
-    _MD_RESNAME_NORM,
     _NON_PROTEIN,
-    three_to_one,
+    _THREE2ONE,
     _normalize_resname,
     build_gpcrdb_sequence,
-    sliding_window_align,
     naming_from_convention,
+    sliding_window_align,
+    three_to_one,
 )
-
 
 # ── _THREE2ONE / three_to_one ─────────────────────────────────────────────────
 

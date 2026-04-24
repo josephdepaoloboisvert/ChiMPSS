@@ -27,7 +27,11 @@
       "Bash(python -c ' *)",
       "Bash(python patch_notebooks.py)",
       "Bash(git mv *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(ruff --version)",
+      "Bash(pip install *)",
+      "Bash(ruff check *)",
+      "Bash(python -m ruff check src/)"
     ],
     "additionalDirectories": [
       "C:\\Users\\josep\\.claude\\plans"

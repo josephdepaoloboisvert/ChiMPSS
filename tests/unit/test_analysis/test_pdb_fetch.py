@@ -10,8 +10,7 @@ import pytest
 
 pytest.importorskip("requests", reason="requests not installed — skipping pdb_fetch tests")
 
-from chimpss.analysis.pdb_fetch import classify_method, GPCRDB
-
+from chimpss.analysis.pdb_fetch import GPCRDB, classify_method
 
 # ── classify_method ───────────────────────────────────────────────────────────
 

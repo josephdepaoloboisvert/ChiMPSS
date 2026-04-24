@@ -6,6 +6,7 @@ They are skipped automatically when that stack is not installed.
 Run with:  pytest tests/unit/test_motorrow/
 """
 import importlib
+
 import pytest
 
 pytest.importorskip("openmm", reason="MD stack not installed — skipping motorrow import tests")

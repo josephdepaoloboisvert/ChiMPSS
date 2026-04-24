@@ -6,18 +6,17 @@ These tests run on Expanse (full conda env) but are skipped on CI.
 
 Functions tested: geometric_distribution, frobenius_norm, jsd_distance_matrices, rmsd.
 """
-import pytest
 import numpy as np
+import pytest
 
 pytest.importorskip("openmm", reason="openmm not installed — skipping fultonmarket math tests")
 
 from chimpss.fultonmarket.utils import (
-    geometric_distribution,
     frobenius_norm,
+    geometric_distribution,
     jsd_distance_matrices,
     rmsd,
 )
-
 
 # ── geometric_distribution ────────────────────────────────────────────────────
 

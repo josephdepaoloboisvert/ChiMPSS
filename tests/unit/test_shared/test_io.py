@@ -6,12 +6,12 @@ is gated. Tests for ensure_exists, write_FASTA, and remove_dummy_atoms use
 only stdlib + tmpfiles and are fast.
 """
 import os
+
 import pytest
 
 pytest.importorskip("mdtraj", reason="mdtraj not installed — skipping shared.io tests")
 
-from chimpss.shared.io import ensure_exists, write_FASTA, remove_dummy_atoms
-
+from chimpss.shared.io import ensure_exists, remove_dummy_atoms, write_FASTA
 
 # ── ensure_exists ─────────────────────────────────────────────────────────────
 

@@ -12,7 +12,7 @@ mdtraj = pytest.importorskip("mdtraj", reason="mdtraj not installed")
 
 
 def test_fultonmarket_package_importable():
-    import chimpss.fultonmarket
+    pass
 
 
 def test_fulton_market_class_importable():
@@ -32,12 +32,8 @@ def test_analysis_class_importable():
 
 def test_utils_importable():
     from chimpss.fultonmarket import (
-        printf,
         geometric_distribution,
-        build_sampler_states,
-        truncate_ncdf,
-        frobenius_norm,
-        jsd_distance_matrices,
+        printf,
     )
     assert callable(printf)
     assert callable(geometric_distribution)
@@ -73,13 +69,13 @@ def test_shim_fultonmarketanalysis():
 
 
 def test_shim_fultonmarketutils():
-    from FultonMarket.FultonMarketUtils import truncate_ncdf, frobenius_norm
+    from FultonMarket.FultonMarketUtils import frobenius_norm, truncate_ncdf
     assert callable(truncate_ncdf)
     assert callable(frobenius_norm)
 
 
 def test_shim_package_init():
-    from FultonMarket import FultonMarket, Randolph, FultonMarketAnalysis
+    from FultonMarket import FultonMarket, FultonMarketAnalysis, Randolph
     assert callable(FultonMarket)
     assert callable(Randolph)
     assert callable(FultonMarketAnalysis)

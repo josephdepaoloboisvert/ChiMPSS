@@ -11,16 +11,15 @@ Run with:
 
 Deselected automatically on CI (which runs -m 'not slow and not gpu').
 """
-import os
 import glob
+import os
+
 import pytest
 
 openmm  = pytest.importorskip("openmm",      reason="openmm not installed")
 mdtraj  = pytest.importorskip("mdtraj",      reason="mdtraj not installed")
 pymbar  = pytest.importorskip("pymbar",      reason="pymbar not installed")
 
-import numpy as np
-import openmm.unit as unit
 
 _TEST_DATA = os.path.join(os.path.dirname(__file__), "..", "..", "test_data")
 _INPUT_DIR = os.path.join(_TEST_DATA, "raw_OPM")
@@ -99,7 +98,7 @@ def test_randolph_short_run(tmp_path):
     if not os.path.exists(sys_xml) or not os.path.exists(state_xml):
         pytest.skip("system/state XML fixtures not found alongside PDB")
 
-    out = _output_dir(tmp_path, "randolph_output")
+    _output_dir(tmp_path, "randolph_output")
 
     init_kwargs = dict(
         input_pdb=pdb,

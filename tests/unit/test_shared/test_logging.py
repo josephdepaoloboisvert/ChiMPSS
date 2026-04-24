@@ -7,7 +7,7 @@ unique_residues / report_chain_information need mdtraj and are gated.
 import re
 from datetime import datetime
 
-from chimpss.shared.logging import timestamp, printf
+from chimpss.shared.logging import printf, timestamp
 
 
 def test_timestamp_returns_string():
@@ -56,7 +56,8 @@ def test_printf_format(capsys):
 def test_unique_residues_and_report_chain_info():
     mdtraj = __import__("pytest").importorskip("mdtraj")
     import os
-    from chimpss.shared.logging import unique_residues, report_chain_information
+
+    from chimpss.shared.logging import report_chain_information, unique_residues
 
     pdb_path = os.path.join(
         os.path.dirname(__file__), "..", "..", "..", "test_data", "raw_OPM", "5xr8.pdb"

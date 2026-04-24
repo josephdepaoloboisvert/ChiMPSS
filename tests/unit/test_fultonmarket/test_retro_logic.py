@@ -9,11 +9,6 @@ chimpss.fultonmarket.__init__ (which imports openmm at module level).
 """
 import importlib.util
 import os
-import sys
-import tempfile
-
-import numpy as np
-import pytest
 
 # ── load submodule without triggering the package __init__ ────────────────────
 _RC_PATH = os.path.join(

@@ -7,6 +7,7 @@ Run with:  pytest tests/unit/test_bridgeport/
 """
 import importlib
 import importlib.util
+
 import pytest
 
 # Skip entire module if MD stack is absent (CI runs with --no-deps)

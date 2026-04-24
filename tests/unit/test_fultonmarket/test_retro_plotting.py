@@ -1,12 +1,13 @@
-import pytest
 import matplotlib
+import pytest
+
 matplotlib.use('Agg')
 
 pytest.importorskip("openmm", reason="openmm not installed — skipping fultonmarket plotting tests")
 
 
 def test_imports():
-    from chimpss.fultonmarket import plot_convergence_metric, add_equil_metric_to_plot
+    from chimpss.fultonmarket import add_equil_metric_to_plot, plot_convergence_metric
     assert callable(plot_convergence_metric)
     assert callable(add_equil_metric_to_plot)
 
