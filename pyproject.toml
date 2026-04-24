@@ -8,34 +8,14 @@ version = "0.1.0"
 description = "Chicago Membrane Protein Simulation Suite — 3-stage MD pipeline (Bridgeport → MotorRow → FultonMarket)"
 requires-python = ">=3.8"
 dependencies = [
-    # Simulation
-    "openmm",
-    "openmmtools",
-    # Structure / trajectory
-    "mdtraj",
-    "MDAnalysis",
-    "pdbfixer",
-    "parmed",
-    "pdb2pqr",
-    # Thermodynamics
-    "pymbar",
-    "mpiplus",
-    # Cheminformatics
-    "rdkit",
-    "openff-toolkit",
-    # Numerics / ML
-    "numpy",
-    "scipy",
-    "scikit-learn",
-    "jax",
-    # Visualization / IO
-    "seaborn",
-    "netCDF4",
-    "py3dmol",
-    # Note — NOT listed here (not pip-installable):
-    #   modeller     → conda install -c salilab modeller
-    #   openbabel    → conda install -c conda-forge openbabel
-    #   vina         → separate AutoDock Vina install
+    # All simulation dependencies (openmm, openmmtools, mdtraj, MDAnalysis, pdbfixer,
+    # parmed, pdb2pqr, pymbar, mpiplus, rdkit, openff-toolkit, numpy, scipy,
+    # scikit-learn, jax, seaborn, netCDF4, py3dmol) must be installed via conda.
+    # See README.md and conda-env.yml for the full environment setup.
+    # NOT listed here (also not pip-installable):
+    #   modeller        → conda install -c salilab modeller
+    #   openbabel       → conda install -c conda-forge openbabel
+    #   vina            → separate AutoDock Vina install
     #   openmmgridforce → pip install git+https://github.com/jimtufts/openmmgridforce
 ]
 

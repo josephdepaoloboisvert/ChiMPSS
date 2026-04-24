@@ -52,23 +52,19 @@ conformational ensemble.
 
 ## Installation
 
-### Core package
+ChiMPSS depends on the OpenMM ecosystem, which is distributed via conda-forge rather than
+PyPI. The full scientific stack must be installed with conda first; `pip` is only used to
+register the package in editable mode and install dev tools.
+
+### Recommended: one-command environment
 
 ```bash
-pip install -e ".[dev]"
+conda env create -f conda-env.yml
+conda activate chimpss
+pip install -e ".[dev]"   # registers the package + installs pytest, ruff, black
 ```
 
-> **Note:** The following dependencies are not available on PyPI and must be installed
-> separately via conda before `pip install`:
->
-> | Package | Install command |
-> |---|---|
-> | MODELLER | `conda install -c salilab modeller` |
-> | OpenBabel | `conda install -c conda-forge openbabel` |
-> | AutoDock Vina | see [vina docs](https://vina.scripps.edu/downloads/) |
-> | openmmgridforce | `pip install git+https://github.com/jimtufts/openmmgridforce` |
-
-### Recommended conda environment
+### Manual conda install (alternative)
 
 ```bash
 conda create -n chimpss python=3.10
@@ -81,6 +77,9 @@ conda install -c conda-forge -c salilab \
 pip install -e ".[dev]"
 pip install git+https://github.com/jimtufts/openmmgridforce
 ```
+
+> **Note:** AutoDock Vina must be installed separately — see the
+> [vina docs](https://vina.scripps.edu/downloads/).
 
 ### MPI support (for FultonMarket multi-node runs)
 
