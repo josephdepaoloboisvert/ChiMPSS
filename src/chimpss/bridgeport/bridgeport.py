@@ -20,6 +20,7 @@ from chimpss.bridgeport.mutated_peptide import MutatedPeptide
 from chimpss.bridgeport.openmm_joiner import Joiner
 from chimpss.bridgeport.protein_preparer import ProteinPreparer
 from chimpss.bridgeport.repair_protein import RepairProtein
+from chimpss.shared.io import build_output_path, file_exists_skip, validate_name
 
 
 class Bridgeport():
@@ -90,6 +91,7 @@ class Bridgeport():
         self.verbose = verbose
         self.input_params = json.load(open(input_json, 'r'))
         self.working_dir = self.input_params['working_dir']
+        self.protein_name = validate_name(self.input_params['protein_name'])
         print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//' + 'Found input parameters.', flush=True)
         for key, item in self.input_params.items():
             try:
@@ -141,17 +143,20 @@ class Bridgeport():
             self.type = 'apo'
             self.name = 'apo'
 
+        self.ligand_name = validate_name(self.name)
 
-        # Get initial structure
-        self.input_pdb_dir = self.input_params['Protein']['input_pdb_dir']
-        pdb_fn = self.input_params['Protein']['input_pdb']
-        self.input_pdb = os.path.join(self.input_pdb_dir, pdb_fn)
+        # Get initial structure (full path; input_pdb_dir derived for any code that needs it)
+        self.input_pdb = self.input_params['Protein']['input_pdb']
+        self.input_pdb_dir = os.path.dirname(self.input_pdb)
         self.chain = self.input_params["Protein"]["chain"]
 
         # Assign other dir locations
         self.lig_only_dir = os.path.join(self.working_dir, 'ligands')
         self.aligned_input_dir = os.path.join(self.working_dir, 'aligned_input_pdb')
         self.prot_only_dir = os.path.join(self.working_dir, 'proteins')
+        self.sys_dir = os.path.join(self.working_dir, 'systems')
+        self.final_pdb = build_output_path(self.sys_dir, self.protein_name, self.ligand_name, 'topology', 'pdb')
+        self.final_xml = build_output_path(self.sys_dir, self.protein_name, self.ligand_name, 'system', 'xml')
 
 
 
@@ -167,7 +172,9 @@ class Bridgeport():
 
         Output system .pdb and .xml file will be found in self.working_dir/systems
         """
-
+        if file_exists_skip(self.final_pdb, 'topology PDB') and file_exists_skip(self.final_xml, 'system XML'):
+            print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//System already built — skipping Bridgeport build.', flush=True)
+            return
 
         # Align first
         self.align_to_reference()
@@ -710,8 +717,7 @@ class Bridgeport():
         """
         Generate forcefields with OpenFF using the ForcefieldHandler and OpenMMJoiner classes.
         """
-        # Create systems dir
-        self.sys_dir = os.path.join(self.working_dir, 'systems')
+        # Create systems dir (self.sys_dir already set in __init__)
         if not os.path.exists(self.sys_dir):
             os.mkdir(self.sys_dir)
             print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//' + 'Created systems directory:', self.sys_dir, flush=True)
@@ -757,9 +763,7 @@ class Bridgeport():
         self.sim.context.setPositions(self.pos)
         print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//' + 'Initial structure potential energy:', np.round(self.sim.context.getState(getEnergy=True).getPotentialEnergy()._value, 2), flush=True)
 
-        # Save combined systems
-        self.final_pdb = os.path.join(self.sys_dir, self.name+'.pdb')
-        self.final_xml = os.path.join(self.sys_dir, self.name+'.xml')
+        # Save combined systems (self.final_pdb / self.final_xml set in __init__)
         with open(self.final_pdb, 'w') as f:
             PDBFile.writeFile(self.sim.topology, self.sim.context.getState(getPositions=True).getPositions(), f, keepIds=True)
         with open(self.final_xml, 'w') as f:

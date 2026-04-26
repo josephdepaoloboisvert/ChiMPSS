@@ -1,30 +1,21 @@
 name: chimpss
 channels:
   - conda-forge
-  - salilab
+  - omnia
+  - conda-canary
   - defaults
+  - salilab
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
 dependencies:
   - python=3.10
-  - openmm
-  - openmmtools
-  - mdtraj
   - mdanalysis
-  - pdbfixer
-  - openff-toolkit
-  - pdb2pqr
-  - parmed
-  - pymbar
-  - mpiplus
-  - rdkit
-  - scikit-learn
-  - numpy
-  - scipy
-  - jax
-  - seaborn
-  - netcdf4
-  - py3dmol
-  - openbabel
   - modeller
-  - pip
-  - pip:
-    - openmmgridforce @ git+https://github.com/jimtufts/openmmgridforce
+  - mpiplus
+  - netcdf4
+  - openbabel
+  - openff-toolkit
+  - openmmtools
+  - seaborn
+  - py3dmol
+  - vina

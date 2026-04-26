@@ -69,6 +69,13 @@ def parse_args():
     p.add_argument('--getcontacts_cores', default=10, type=int,
                    help='CPU cores passed to getContacts via --cores. Default 10.')
 
+    p.add_argument('--protein-name', default=None, type=str,
+                   help='Protein name for output file naming (no underscores or periods). '
+                        'When combined with --ligand-name, outputs are named '
+                        'PROTEIN_LIGAND.trajectory.ncdf / PROTEIN_LIGAND.checkpoint.ncdf.')
+    p.add_argument('--ligand-name', default=None, type=str,
+                   help='Ligand name for output file naming (no underscores or periods).')
+
     return p.parse_args()
 
 
@@ -82,7 +89,9 @@ def main():
                 input_state=args.input_state,
                 T_min=args.T_min,
                 T_max=args.T_max,
-                n_replicates=args.n_replicates)
+                n_replicates=args.n_replicates,
+                protein_name=args.protein_name,
+                ligand_name=args.ligand_name)
 
     os.makedirs(args.output_dir, exist_ok=True)
 

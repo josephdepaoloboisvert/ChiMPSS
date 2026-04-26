@@ -10,6 +10,35 @@ def ensure_exists(directory):
     return True
 
 
+def validate_name(name: str) -> str:
+    """Raise ValueError if name contains underscores or periods (reserved separators)."""
+    if '_' in name or '.' in name:
+        raise ValueError(
+            f"Name '{name}' contains '_' or '.' — these are reserved separators "
+            "in the PROTEIN_LIGAND.significance.extension naming scheme."
+        )
+    return name
+
+
+def build_output_path(output_dir: str, protein_name: str, ligand_name: str,
+                      significance: str, extension: str) -> str:
+    """Return output_dir/PROTEIN_LIGAND.significance.extension as an absolute path."""
+    stem = f"{protein_name}_{ligand_name}"
+    return os.path.join(output_dir, f"{stem}.{significance}.{extension}")
+
+
+def file_exists_skip(path: str, label: str = '', logger=None) -> bool:
+    """Return True (and log) if path already exists so the caller can skip redundant work."""
+    if os.path.exists(path):
+        msg = f"[skip] {label or path} already exists — skipping."
+        if logger:
+            logger.info(msg)
+        else:
+            print(msg)
+        return True
+    return False
+
+
 def slice_select(traj, selection):
     return traj.atom_slice(traj.top.select(selection))
 

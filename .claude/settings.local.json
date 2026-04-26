@@ -31,7 +31,11 @@
       "Bash(ruff --version)",
       "Bash(pip install *)",
       "Bash(ruff check *)",
-      "Bash(python -m ruff check src/)"
+      "Bash(python -m ruff check src/)",
+      "Bash(git pull *)",
+      "Bash(xargs grep *)",
+      "Bash(awk '{print $9, $5}')",
+      "Bash(sort -k2 -rn)"
     ],
     "additionalDirectories": [
       "C:\\Users\\josep\\.claude\\plans"

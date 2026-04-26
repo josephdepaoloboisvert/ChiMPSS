@@ -206,3 +206,74 @@ pytest tests/unit/test_analysis/test_gpcr_pca.py -v
 pytest tests/unit/ -v -m "not slow and not gpu"
 
 echo "Phase 8 OK"
+
+# ── Phase 9: File naming, path handling, and existence checks ─────────────────
+echo "=== Phase 9: file naming + path utilities ==="
+
+# 9a: shared.io new utilities
+python -c "
+from chimpss.shared.io import validate_name, build_output_path, file_exists_skip
+
+# validate_name: accept clean names
+assert validate_name('5HT2B') == '5HT2B'
+assert validate_name('LSD') == 'LSD'
+
+# validate_name: reject names with _ or .
+for bad in ['bad_name', 'bad.name', 'a_b.c']:
+    try:
+        validate_name(bad)
+        assert False, f'should have raised for {bad!r}'
+    except ValueError:
+        pass
+
+# build_output_path: correct filename format
+import os
+p = build_output_path('/tmp', '5HT2B', 'LSD', 'topology', 'pdb')
+assert p == '/tmp/5HT2B_LSD.topology.pdb', p
+p2 = build_output_path('/tmp', 'ADRB2', 'isoproterenol', 'trajectory', 'ncdf')
+assert p2 == '/tmp/ADRB2_isoproterenol.trajectory.ncdf', p2
+
+# file_exists_skip: returns False for non-existent, True for existing
+import tempfile, os
+assert file_exists_skip('/nonexistent/path/xyz.pdb', 'test') is False
+with tempfile.NamedTemporaryFile(suffix='.pdb', delete=False) as f:
+    tmp = f.name
+try:
+    assert file_exists_skip(tmp, 'test') is True
+finally:
+    os.unlink(tmp)
+
+print('Phase 9a: shared.io utilities OK')
+"
+
+# 9b: import smoke tests for all three stage classes
+python -c "from chimpss.bridgeport import Bridgeport; print('Bridgeport import OK')"
+python -c "from chimpss.motorrow import MotorRow; print('MotorRow import OK')"
+python -c "from chimpss.fultonmarket import FultonMarket; print('FultonMarket import OK')"
+
+# 9c: CLI help includes new flags
+chimpss-motorrow --help | grep -q "protein-name" && echo "chimpss-motorrow --protein-name flag OK"
+chimpss-motorrow --help | grep -q "ligand-name"  && echo "chimpss-motorrow --ligand-name flag OK"
+chimpss-fultonmarket --help | grep -q "protein-name" && echo "chimpss-fultonmarket --protein-name flag OK"
+chimpss-fultonmarket --help | grep -q "ligand-name"  && echo "chimpss-fultonmarket --ligand-name flag OK"
+
+# 9d: no notebook still uses the old two-key Protein dict
+python -c "
+import json, glob, sys
+failures = []
+for path in glob.glob('notebooks/**/*.ipynb', recursive=True):
+    try:
+        nb = json.load(open(path, encoding='utf-8', errors='replace'))
+        for i, cell in enumerate(nb.get('cells', [])):
+            if cell.get('cell_type') == 'code':
+                src = ''.join(cell.get('source', []))
+                if 'input_pdb_dir' in src and \"json_dict['Protein']\" in src:
+                    failures.append(f'{path} cell {i}')
+    except Exception:
+        pass
+if failures:
+    print('OLD Protein dict pattern found:'); [print(' ', f) for f in failures]; sys.exit(1)
+print('Phase 9d: no old Protein dict schema in notebooks OK')
+"
+
+echo "Phase 9 OK"

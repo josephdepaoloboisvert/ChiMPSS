@@ -15,6 +15,7 @@ from chimpss.motorrow.utils import (
     restrain_atoms,
     unpack_infiles,
 )
+from chimpss.shared.io import build_output_path, file_exists_skip, validate_name
 
 
 class MotorRow():
@@ -31,7 +32,8 @@ class MotorRow():
         Common - dt=2.0fs ; Temp=300K ; Platform=OpenCL ; 1000 step stdout ; 5000 step dcd ;
     """
 
-    def __init__(self, pdb_file, system_xml, working_directory, lig_resname: str='UNK', lig_chain: str=None):
+    def __init__(self, pdb_file, system_xml, working_directory, lig_resname: str='UNK', lig_chain: str=None,
+                 protein_name: str=None, ligand_name: str=None):
         """
         Parse the xml into an openmm system; sets the self.system attribute from the xml file; sets the self.topology attribute from pdb_file
 
@@ -73,6 +75,8 @@ class MotorRow():
         if lig_chain is not None:
             lig_chain = lig_chain.strip()
         self.lig_chain = lig_chain
+        self.protein_name = validate_name(protein_name) if protein_name else None
+        self.ligand_name = validate_name(ligand_name) if ligand_name else None
 
 
     def main(self, pdb_in, restrain_step_5: bool=False, step_5_nsteps: int=1250000):
@@ -92,25 +96,43 @@ class MotorRow():
             state_fn: string: path to the XML serialized state file
             pdb_fn: string: path to the final structure of the equilibration simulation.
         """
-        #IF the pdb is absolute, store other files in that same directory (where the pdb is)
-        if os.path.isabs(pdb_in):
-            pass
-        else:
+        if not os.path.isabs(pdb_in):
             shutil.copy(pdb_in, os.path.join(self.abs_work_dir, pdb_in))
             pdb_in = os.path.join(self.abs_work_dir, pdb_in)
 
-        #Minimize
-        state_fn, pdb_fn = self._minimize(pdb_in)
-        #NVT Restrained
-        state_fn, pdb_fn = self._run_step(state_fn, 1, nsteps=125000, positions_from_pdb=pdb_fn, restrain_lig=True) #250 ps
-        #NPT Restrained
-        state_fn, pdb_fn = self._run_step(state_fn, 2, nsteps=125000, positions_from_pdb=pdb_fn, restrain_lig=True) #250 ps
-        #NVT no Restraints
-        state_fn, pdb_fn = self._run_step(state_fn, 3, nsteps=125000, positions_from_pdb=pdb_fn, restrain_lig=True) #250 ps
-        #NPT Membrane Barostat
-        state_fn, pdb_fn = self._run_step(state_fn, 4, nsteps=1250000, positions_from_pdb=pdb_fn, restrain_lig=True) #2500 ps
-        #NPT Barostat
-        state_fn, pdb_fn = self._run_step(state_fn, 5, nsteps=step_5_nsteps, positions_from_pdb=pdb_fn, restrain_lig=restrain_step_5) #2500 ps
+        # Minimization (step 0) — skip if already done
+        min_xml = os.path.join(self.abs_work_dir, 'minimized.xml')
+        min_pdb = os.path.join(self.abs_work_dir, 'minimized.pdb')
+        if file_exists_skip(min_xml, 'MotorRow minimization'):
+            state_fn, pdb_fn = min_xml, min_pdb
+        else:
+            state_fn, pdb_fn = self._minimize(pdb_in)
+
+        # Steps 1–5: (stepnum, nsteps, restrain_lig)
+        step_configs = [
+            (1, 125000,        True),           # NVT restrained     250 ps
+            (2, 125000,        True),           # NPT restrained     250 ps
+            (3, 125000,        True),           # NVT free           250 ps
+            (4, 1250000,       True),           # NPT membrane barostat 2.5 ns
+            (5, step_5_nsteps, restrain_step_5),# NPT isotropic     2.5 ns
+        ]
+        for stepnum, nsteps, restrain_lig in step_configs:
+            step_xml = os.path.join(self.abs_work_dir, f'step_{stepnum}.xml')
+            step_pdb = os.path.join(self.abs_work_dir, f'step_{stepnum}.pdb')
+            if file_exists_skip(step_xml, f'MotorRow step {stepnum}'):
+                state_fn, pdb_fn = step_xml, step_pdb
+            else:
+                state_fn, pdb_fn = self._run_step(state_fn, stepnum, nsteps=nsteps,
+                                                   positions_from_pdb=pdb_fn,
+                                                   restrain_lig=restrain_lig)
+
+        # If protein/ligand names were provided, rename final outputs with the new convention
+        if self.protein_name and self.ligand_name:
+            final_pdb = build_output_path(self.abs_work_dir, self.protein_name, self.ligand_name, 'equil', 'pdb')
+            final_xml = build_output_path(self.abs_work_dir, self.protein_name, self.ligand_name, 'state', 'xml')
+            os.rename(pdb_fn, final_pdb)
+            os.rename(state_fn, final_xml)
+            pdb_fn, state_fn = final_pdb, final_xml
 
         return state_fn, pdb_fn
 
@@ -345,10 +367,10 @@ class MotorRow():
             simulation.loadState(state_in)
 
         if fn_stdout is None:
-            fn_stdout = os.path.join(self.abs_work_dir, f'step{stepnum}.stdout')
+            fn_stdout = os.path.join(self.abs_work_dir, f'step_{stepnum}.log')
 
         if fn_dcd is None:
-            fn_dcd = os.path.join(self.abs_work_dir, f'step{stepnum}.dcd')
+            fn_dcd = os.path.join(self.abs_work_dir, f'step_{stepnum}.dcd')
 
         SDR = app.StateDataReporter(fn_stdout, nstdout, step=True, time=True,
                                     potentialEnergy=True, temperature=True, progress=False,
@@ -363,7 +385,7 @@ class MotorRow():
 
         # Write out state.xml
         if state_xml_out is None:
-            state_xml_out = os.path.join(self.abs_work_dir, f'Step_{stepnum}.xml')
+            state_xml_out = os.path.join(self.abs_work_dir, f'step_{stepnum}.xml')
 
         # Determine no. of steps per cycle
         steps_per_cycle = int(nsteps / ncycles)
@@ -393,7 +415,7 @@ class MotorRow():
         print(f'Box Vectors after this step {simulation.system.getDefaultPeriodicBoxVectors()}')
 
         if pdb_out is None:
-            pdb_out = os.path.join(self.abs_work_dir, f'Step_{stepnum}.pdb')
+            pdb_out = os.path.join(self.abs_work_dir, f'step_{stepnum}.pdb')
         self._write_structure(simulation, pdb_out)
 
         for i in range(3):

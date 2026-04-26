@@ -11,6 +11,7 @@ from openmmtools.states import SamplerState, ThermodynamicState
 from chimpss.fultonmarket.analysis import FultonMarketAnalysis
 from chimpss.fultonmarket.randolph import Randolph
 from chimpss.fultonmarket.utils import *
+from chimpss.shared.io import build_output_path, file_exists_skip, validate_name
 
 
 class FultonMarket():
@@ -42,13 +43,17 @@ class FultonMarket():
                  sele_str: str = None,
                  T_min: float = 300,
                  T_max: float = 367.447,
-                 n_replicates: int = 12):
+                 n_replicates: int = 12,
+                 protein_name: str = None,
+                 ligand_name: str = None):
 
         printf('Welcome to FultonMarket.')
 
         self.temperatures = [temp * unit.kelvin for temp in geometric_distribution(T_min, T_max, n_replicates)]
         self.n_replicates = n_replicates
         self.sele_str = sele_str
+        self.protein_name = validate_name(protein_name) if protein_name else None
+        self.ligand_name = validate_name(ligand_name) if ligand_name else None
 
         self.input_pdb = input_pdb
         self.pdb = PDBFile(input_pdb)
@@ -184,10 +189,18 @@ class FultonMarket():
         # Prepare output directories
         self.output_dir = output_dir
         self.name = output_dir.split('/')[-1]
-        self.output_ncdf = os.path.join(output_dir, 'output.ncdf')
-        self.checkpoint_ncdf = os.path.join(output_dir, 'output_checkpoint.ncdf')
+        if self.protein_name and self.ligand_name:
+            self.output_ncdf     = build_output_path(output_dir, self.protein_name, self.ligand_name, 'trajectory', 'ncdf')
+            self.checkpoint_ncdf = build_output_path(output_dir, self.protein_name, self.ligand_name, 'checkpoint', 'ncdf')
+        else:
+            self.output_ncdf     = os.path.join(output_dir, 'output.ncdf')
+            self.checkpoint_ncdf = os.path.join(output_dir, 'output_checkpoint.ncdf')
         self.save_dir = os.path.join(output_dir, 'saved_variables')
         os.makedirs(self.save_dir, exist_ok=True)
+
+        if file_exists_skip(self.output_ncdf, 'FultonMarket trajectory'):
+            print('Trajectory already exists. Move or delete it to re-run.')
+            return
 
         printf(f'total_sim_time      : {self.total_sim_time} ns')
         printf(f'iter_length         : {self.iter_length} ns')

@@ -3,6 +3,27 @@
 All notable changes to ChiMPSS are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.1.2] — File naming, path handling, and existence checks
+
+### Added
+- `src/chimpss/shared/io.py`: three new utilities — `validate_name` (rejects names with `_` or `.`), `build_output_path` (constructs `PROTEIN_LIGAND.significance.ext` paths), `file_exists_skip` (returns True and logs if output already exists)
+- `protein_name` / `ligand_name` optional args added to `MotorRow.__init__` and `FultonMarket.__init__`; CLI flags `--protein-name` / `--ligand-name` added to `chimpss-motorrow` and `chimpss-fultonmarket`
+- `protein_name` required field added to Bridgeport JSON schema (`input_params['protein_name']`)
+
+### Changed
+- **Bridgeport**: `Protein.input_pdb_dir` + `Protein.input_pdb` merged into a single `Protein.input_pdb` full path. Old JSON files must be updated.
+- **Bridgeport outputs**: system PDB renamed `PROTEIN_LIGAND.topology.pdb`; system XML renamed `PROTEIN_LIGAND.system.xml`. `run()` skips the full build if these outputs already exist.
+- **MotorRow step naming**: `Step_{n}.xml/pdb` → `step_{n}.xml/pdb`, `step{n}.dcd` → `step_{n}.dcd`, `step{n}.stdout` → `step_{n}.log`. **Breaking for in-flight jobs** — rename files manually or re-run from scratch.
+- **MotorRow final outputs**: when `protein_name`/`ligand_name` are provided, step 5 outputs are renamed to `PROTEIN_LIGAND.equil.pdb` and `PROTEIN_LIGAND.state.xml`. `main()` now loops over steps with per-step existence checks, enabling resume from a partial run.
+- **FultonMarket outputs**: trajectory renamed `PROTEIN_LIGAND.trajectory.ncdf`; checkpoint renamed `PROTEIN_LIGAND.checkpoint.ncdf` (when names provided). `run()` skips if trajectory already exists.
+- Example notebooks (`SMALL_MOLECULE_EXAMPLE`, `ANALOGUE_EXAMPLE`, `PEPTIDE_EXAMPLE`, `MUTATED_PEPTIDE_EXAMPLE`, `interactive`): updated JSON dict cells to use `protein_name` + single-path `Protein.input_pdb`
+- Tutorial `07-System_Preparation.ipynb`: updated protein dict cell and visualization to use new schema
+
+### Backwards compatibility
+- `protein_name` / `ligand_name` are **optional** in MotorRow and FultonMarket — omitting them preserves old generic naming
+- `protein_name` is **required** in Bridgeport JSON; old JSON files missing this key will raise `KeyError`
+- `Protein.input_pdb_dir` key is **removed** from Bridgeport JSON
+
 ## [Unreleased]
 
 ### Added (Phase 8 — Test suite + CI)
