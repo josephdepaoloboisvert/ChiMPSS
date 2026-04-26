@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chimpss"
-version = "0.1.1"
+version = "0.1.2"
 description = "Chicago Membrane Protein Simulation Suite — 3-stage MD pipeline (Bridgeport → MotorRow → FultonMarket)"
 requires-python = ">=3.8"
 dependencies = [
