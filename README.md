@@ -90,11 +90,20 @@ Documentation can be improved for the arguments here, documentation across the b
 Arguments with simple names should be better described\
 
 Analysis should be made into a seperate module, with a number of submodules which are related yet almost independent:\
+
 analysis.reporting - this module is for making plots of data that already exists (such as plotting the energy or box volume over a simulation)\
 analysis.conventional - this module is for the analysis of "straight" MD.  Straight is in quotes because the data appears to the code as straight md (one pdb one dcd as input).  In actuallity this dcd may be a resampled set of frames, but this module is for the analysis of one trajectory (set of coordinates) \
 analysis.ptre - this module is for the analysis of PTRE simulations.  Analyses within this module necessitate the usage and/or processing of data from multiple states of the simulation\
 
-Something we need to do soon, maybe even now is rational design with an AI/ML facelift, likely VAE.
+
+### Very Later things
+
+There are historically issues regarding the placement of the protein, for system construction
+it requires that the protein center of mass is at the origin, because membrane is added with leaflets
+split on the XY plane.  Simulation with periodic boundary conditions however requires that all
+particles are in the positive coorinate region (first "quadrant" of three d space).  This inconsistency in the protein center of mass location has sometimes led to a translation of the protein/ligand that does not
+effect the other.
+
 
 
 
