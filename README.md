@@ -165,6 +165,57 @@ pip install -e ".[dev]"
 pip install -e ".[mpi]"   # installs mpi4py
 ```
 
+### GPU-enabled JAX (required for FultonMarket on GPU)
+
+The conda-forge `jax` package is CPU-only.  FultonMarket's PTRE engine requires a
+GPU-accelerated JAX build, which must be installed separately via pip **after** the
+conda environment is active.
+
+**CUDA 12.x (most common on modern GPUs and HPC clusters):**
+
+```bash
+pip install -U "jax[cuda12]"
+```
+
+Verify GPU access after installation:
+
+```python
+import jax
+print(jax.devices())   # should list one or more CudaDevice entries
+```
+
+> **Note:** the pip JAX wheel must match the CUDA toolkit version present on the
+> machine.  On HPC systems (e.g. Expanse) load the appropriate CUDA module
+> (`module load cuda/12.2` or similar) before running pip so the installer can
+> detect the correct variant automatically.
+
+### getcontacts (required for contact-distance convergence metrics)
+
+getcontacts is not available on PyPI or conda-forge and must be installed directly
+from its GitHub repository.
+
+```bash
+# clone anywhere on the machine
+git clone https://github.com/getcontacts/getcontacts.git ~/getcontacts
+
+# add the directory to PATH (add this line to ~/.bashrc or ~/.bash_profile)
+export PATH="$HOME/getcontacts:$PATH"
+
+# verify
+get_dynamic_contacts.py --help
+```
+
+getcontacts also requires **VMD** (Visual Molecular Dynamics) for some contact
+calculation backends.  Install VMD from https://www.ks.uiuc.edu/Research/vmd/ and
+ensure the `vmd` binary is on your PATH.
+
+After installation, confirm ChiMPSS can locate getcontacts:
+
+```python
+from chimpss.analysis.contacts import check_getcontacts
+check_getcontacts()   # prints path if found, raises if not
+```
+
 ---
 
 ## Stage 1 — Bridgeport: System Construction
