@@ -67,14 +67,11 @@ def unpack_infiles(xml, pdb):
     return system, pdb.topology, pdb.positions
 
 def parse_atom_inds(atom_inds, parse_atom_names, find_atom_names):
-
-    parsed_atom_inds = np.empty(len(find_atom_names), dtype=int)
-    for (atom_i, parse_atom_name) in zip(atom_inds, parse_atom_names):
-        if parse_atom_name in find_atom_names:
-            find_atom_name_ind = list(find_atom_names).index(parse_atom_name)
-            parsed_atom_inds[find_atom_name_ind] = atom_i
-
-    return parsed_atom_inds
+    find_set = set(find_atom_names)
+    return np.array(
+        [atom_i for atom_i, name in zip(atom_inds, parse_atom_names) if name in find_set],
+        dtype=int,
+    )
 
 def minimize_from_sys(sys, top, pos, temp=300.0, dt=2.0):
 
