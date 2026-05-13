@@ -1,0 +1,205 @@
+import os
+
+import mdtraj as md
+import numpy as np
+
+
+def ensure_exists(directory):
+    """Create *directory* (and any parents) if it does not already exist."""
+    if not os.path.isdir(directory):
+        os.makedirs(directory)
+    return True
+
+
+def validate_name(name: str) -> str:
+    """Raise ValueError if name contains underscores or periods (reserved separators)."""
+    if '_' in name or '.' in name:
+        raise ValueError(
+            f"Name '{name}' contains '_' or '.' — these are reserved separators "
+            "in the PROTEIN_LIGAND.significance.extension naming scheme."
+        )
+    return name
+
+
+def build_output_path(output_dir: str, protein_name: str, ligand_name: str,
+                      significance: str, extension: str) -> str:
+    """Return output_dir/PROTEIN_LIGAND.significance.extension as an absolute path."""
+    stem = f"{protein_name}_{ligand_name}"
+    return os.path.join(output_dir, f"{stem}.{significance}.{extension}")
+
+
+def file_exists_skip(path: str, label: str = '', logger=None) -> bool:
+    """Return True (and log) if path already exists so the caller can skip redundant work."""
+    if os.path.exists(path):
+        msg = f"[skip] {label or path} already exists — skipping."
+        if logger:
+            logger.info(msg)
+        else:
+            print(msg)
+        return True
+    return False
+
+
+def slice_select(traj, selection):
+    """Return an mdtraj sub-trajectory containing only atoms matching *selection*.
+
+    Parameters
+    ----------
+    traj : mdtraj.Trajectory
+    selection : str
+        MDTraj DSL selection string (e.g. ``"protein"``).
+    """
+    return traj.atom_slice(traj.top.select(selection))
+
+
+def write_json(dict, json_fn):
+    """Serialise *dict* to a JSON file at *json_fn* with 6-space indentation."""
+    import json as _json
+    with open(json_fn, 'w') as f:
+        _json.dump(dict, f, indent=6)
+
+
+def write_FASTA(sequence, name, fasta_path):
+    """Write a MODELLER-compatible FASTA file.
+
+    Parameters
+    ----------
+    sequence : str
+        One-letter amino-acid sequence (no whitespace).
+    name : str
+        Sequence identifier written into the FASTA header.
+    fasta_path : str
+        Destination file path.
+
+    Returns
+    -------
+    str
+        The resolved *fasta_path* that was written.
+    """
+    FASTA = f""">P1;{name}
+                 sequence; {name}:::::::::
+                 {sequence}*"""
+    with open(fasta_path, 'w') as f:
+        f.write(FASTA)
+    return fasta_path
+
+
+def cif2pdb(cif_fn):
+    """Convert a CIF file to PDB format via OpenBabel.
+
+    Parameters
+    ----------
+    cif_fn : str
+        Path to the input ``.cif`` file.
+
+    Returns
+    -------
+    str
+        Path to the generated ``.obabel.pdb`` file.
+    """
+    pdb_fn = cif_fn.replace('.cif', '.obabel.pdb')
+    _ = os.system(f'obabel -icif {cif_fn} -opdb -O{pdb_fn}')
+    return pdb_fn
+
+
+def remove_dummy_atoms(pdb_file):
+    """Strip ``DUM`` HETATM lines from an OPM-style PDB file.
+
+    Parameters
+    ----------
+    pdb_file : str
+        Path to the input PDB file.
+
+    Returns
+    -------
+    str
+        Path to the cleaned PDB written alongside the input as
+        ``<stem>_no_dummy.pdb``.
+    """
+    new_fn = pdb_file.replace('.pdb', '_no_dummy.pdb')
+    with open(pdb_file, 'r') as f:
+        lines = f.read().split('\n')
+    new_lines = [line for line in lines if False in ['HETATM' in line, 'DUM' in line]]
+    with open(new_fn, 'w') as f:
+        f.write('\n'.join(new_lines))
+    return new_fn
+
+
+def isolate_chains(traj, work_dir, resname_limitation=None, from_file=False, verbose=False):
+    """
+    Write individual chain PDB files from a trajectory.
+
+    resname_limitation: dict of chain index → list of resnames, 'protein', None, or 'dont'
+    from_file: if True, traj is a filepath string to load
+    """
+    if from_file:
+        traj = md.load(traj)
+    ensure_exists(work_dir)
+    for chain in traj.top.chains:
+        if resname_limitation:
+            limitation = resname_limitation[chain.index]
+            if isinstance(limitation, list):
+                parts = ' or '.join([f'resname {name}' for name in limitation])
+                selection_string = f"chainid {chain.index} and ({parts})"
+            elif limitation == 'protein':
+                selection_string = f"chainid {chain.index} and protein"
+            elif limitation is None:
+                selection_string = f"chainid {chain.index}"
+            elif limitation == 'dont':
+                continue
+            else:
+                raise Exception('Limitation must be a list of resnames, "protein", None, or "dont"')
+        else:
+            selection_string = f"chainid {chain.index}"
+        if verbose:
+            print(chain.index, selection_string)
+        chain_traj = traj.atom_slice(traj.top.select(selection_string))
+        chain_pdb_fn = os.path.join(work_dir, f"chain{chain.index}ID{chain.chain_id}.pdb")
+        chain_traj.save_pdb(chain_pdb_fn)
+    return True
+
+
+def change_resname(pdb_file_in, pdb_file_out, resname_in, resname_out):
+    """Interactively replace all occurrences of resname_in with resname_out in a PDB file."""
+    with open(pdb_file_in, 'r') as f:
+        lines = f.readlines()
+    print('Effected Lines:')
+    eff_lines = [line for line in lines if resname_in in line]
+    for line in eff_lines:
+        print(line, "-->", line.replace(resname_in, resname_out))
+    user_input = input("Confirm to make these changes [y/n] :")
+    if user_input == 'y':
+        lines = [line.replace(resname_in, resname_out) for line in lines]
+        with open(pdb_file_out, 'w') as f:
+            f.writelines(lines)
+        return pdb_file_out
+    else:
+        print('Aborting....')
+        return None
+
+
+def describe_system(sys):
+    """Print box vectors, forces, and particle count for an OpenMM ``System``."""
+    box_vecs = sys.getDefaultPeriodicBoxVectors()
+    print('Box Vectors')
+    [print(box_vec) for box_vec in box_vecs]
+    forces = sys.getForces()
+    print('Forces')
+    [print(force) for force in forces]
+    num_particles = sys.getNumParticles()
+    print(num_particles, 'Particles')
+
+
+def describe_state(state, name: str = "State"):
+    """Print potential energy and maximum force from an OpenMM ``State``.
+
+    Parameters
+    ----------
+    state : openmm.State
+        State retrieved with ``getEnergy=True`` and ``getForces=True``.
+    name : str, optional
+        Label prepended to the output line.  Default ``"State"``.
+    """
+    max_force = max(np.sqrt(v.x**2 + v.y**2 + v.z**2) for v in state.getForces())
+    print(f"{name} has energy {round(state.getPotentialEnergy()._value, 2)} kJ/mol ",
+          f"with maximum force {round(max_force, 2)} kJ/(mol nm)")

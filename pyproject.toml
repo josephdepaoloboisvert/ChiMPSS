@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chimpss"
+version = "0.1.2"
+description = "Chicago Membrane Protein Simulation Suite — 3-stage MD pipeline (Bridgeport → MotorRow → FultonMarket)"
+requires-python = ">=3.8"
+dependencies = [
+    # All simulation dependencies (openmm, openmmtools, mdtraj, MDAnalysis, pdbfixer,
+    # parmed, pdb2pqr, pymbar, mpiplus, rdkit, openff-toolkit, numpy, scipy,
+    # scikit-learn, jax, seaborn, netCDF4, py3dmol) must be installed via conda.
+    # See README.md and conda-env.yml for the full environment setup.
+    # NOT listed here (also not pip-installable):
+    #   modeller        → conda install -c salilab modeller
+    #   openbabel       → conda install -c conda-forge openbabel
+    #   vina            → separate AutoDock Vina install
+    #   openmmgridforce → pip install git+https://github.com/jimtufts/openmmgridforce
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "black",
+    "pre-commit",
+]
+mpi = [
+    "mpi4py",
+]
+docs = [
+    "sphinx",
+    "sphinx-rtd-theme",
+    "sphinx-autodoc-typehints",
+    "myst-parser",
+]
+
+[project.scripts]
+# chimpss-bridgeport is deferred (Bridgeport has no RUN_BRIDGEPORT.py; used interactively)
+chimpss-motorrow         = "chimpss.cli.motorrow:main"
+chimpss-fultonmarket     = "chimpss.cli.fultonmarket:main"
+chimpss-fultonmarket-mpi = "chimpss.cli.fultonmarket_mpi:main"
+chimpss-retro-analysis   = "chimpss.cli.retro_analysis:main"
+chimpss-fetch-pdbs       = "chimpss.cli.fetch_pdbs:main"
+chimpss-generate-pca     = "chimpss.cli.generate_pca:main"
+chimpss-project-pca      = "chimpss.cli.project_pca:main"
+chimpss-recovery         = "chimpss.cli.recovery:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"chimpss.bridgeport" = ["*.xml"]
+
+[tool.ruff]
+target-version = "py38"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",   # line too long — handled separately
+    "F403",   # star imports (intentional: openmm, openmm.app, openmm.unit)
+    "F405",   # may be from star import (follows from F403 above)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Imports follow module-level side-effect setup (faulthandler, warnings, etc.)
+"src/chimpss/fultonmarket/__init__.py" = ["E402"]
+# Imports follow try/except blocks for optional heavy deps
+"src/chimpss/bridgeport/analogue.py" = ["E402"]
+"src/chimpss/bridgeport/ligand.py" = ["E402"]
+
+[tool.black]
+target-version = ["py38"]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests requiring long runtimes or HPC (deselect with '-m not slow')",
+    "gpu: marks tests requiring a GPU (deselect with '-m not gpu')",
+]

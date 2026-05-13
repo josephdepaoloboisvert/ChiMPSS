@@ -1,0 +1,21 @@
+name: chimpss
+channels:
+  - conda-forge
+  - omnia
+  - conda-canary
+  - defaults
+  - salilab
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+dependencies:
+  - python=3.10
+  - mdanalysis
+  - modeller
+  - mpiplus
+  - netcdf4
+  - openbabel
+  - openff-toolkit
+  - openmmtools
+  - seaborn
+  - py3dmol
+  - vina

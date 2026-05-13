@@ -1,0 +1,15 @@
+
+[dev]
+pytest
+pytest-cov
+ruff
+black
+pre-commit
+
+[docs]
+sphinx
+myst-parser
+sphinx-autodoc-typehints
+
+[mpi]
+mpi4py
