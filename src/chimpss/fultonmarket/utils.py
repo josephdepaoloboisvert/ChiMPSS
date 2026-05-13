@@ -191,9 +191,9 @@ def truncate_ncdf(ncdf_in, ncdf_out, out_dir, reporter, is_checkpoint: bool=Fals
 
 def rmsd(a, b):
     if len(a.shape) == 1:
-        return np.sqrt(((a - b)**2).sum(-1).mean())
+        return np.sqrt(np.mean((a - b)**2))
     else:
-        return np.array([np.sqrt(((a[i] - b[i])**2).sum(-1).mean()) for i in range(a.shape[0])])
+        return np.array([np.sqrt(np.mean((a[i] - b[i])**2)) for i in range(a.shape[0])])
 
 def plot_MRC(domains, mean_weighted_rc, mean_weighted_rc_err, savefig: str=None):
 
