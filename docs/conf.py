@@ -14,6 +14,31 @@ author = 'josephdepaoloboisvert'
 copyright = f'2024, {author}'
 release = '0.1.2'
 
+# ── Mock heavy simulation dependencies ──────────────────────────────────────
+# These packages are not available in the RTD build environment.
+# Mocking them lets autodoc import chimpss modules and extract docstrings
+# without needing a full conda simulation stack.
+autodoc_mock_imports = [
+    "openmm",
+    "MDAnalysis",
+    "mdtraj",
+    "rdkit",
+    "openff",
+    "openff.toolkit",
+    "pdbfixer",
+    "parmed",
+    "modeller",
+    "mpiplus",
+    "openmmtools",
+    "pymbar",
+    "netCDF4",
+    "jax",
+    "mpi4py",
+    "seaborn",
+    "py3Dmol",
+    "nglview",
+]
+
 # ── Extensions ───────────────────────────────────────────────────────────────
 extensions = [
     'sphinx.ext.autodoc',       # pull docstrings from source
