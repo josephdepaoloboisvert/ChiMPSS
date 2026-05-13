@@ -20,6 +20,7 @@ from chimpss.bridgeport.mutated_peptide import MutatedPeptide
 from chimpss.bridgeport.openmm_joiner import Joiner
 from chimpss.bridgeport.protein_preparer import ProteinPreparer
 from chimpss.bridgeport.repair_protein import RepairProtein
+from chimpss.bridgeport._utils import apply_force_groups, apply_hmr
 from chimpss.shared.io import build_output_path, file_exists_skip, validate_name
 
 
@@ -155,8 +156,10 @@ class Bridgeport():
         self.aligned_input_dir = os.path.join(self.working_dir, 'aligned_input_pdb')
         self.prot_only_dir = os.path.join(self.working_dir, 'proteins')
         self.sys_dir = os.path.join(self.working_dir, 'systems')
-        self.final_pdb = build_output_path(self.sys_dir, self.protein_name, self.ligand_name, 'topology', 'pdb')
-        self.final_xml = build_output_path(self.sys_dir, self.protein_name, self.ligand_name, 'system', 'xml')
+        self.final_pdb     = build_output_path(self.sys_dir, self.protein_name, self.ligand_name, 'topology',    'pdb')
+        self.final_xml     = build_output_path(self.sys_dir, self.protein_name, self.ligand_name, 'system',       'xml')
+        self.final_xml_fg  = build_output_path(self.sys_dir, self.protein_name, self.ligand_name, 'FG_system',    'xml')
+        self.final_xml_hmr = build_output_path(self.sys_dir, self.protein_name, self.ligand_name, 'FG_HMR_system','xml')
 
 
 
@@ -799,6 +802,33 @@ class Bridgeport():
         print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//' + 'Final system coordinates saved to', self.final_pdb, flush=True)
         print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//' + 'Final system parameters saved to', self.final_xml, flush=True)
 
+        self._write_adjusted_systems()
+
+
+
+    def _write_adjusted_systems(self):
+        """Write force-group and force-group+HMR variants of the final system XML.
+
+        Reads self.final_xml (written by reposition_at_origin) and produces:
+          - self.final_xml_fg  : force groups assigned (PME reciprocal → group 1)
+          - self.final_xml_hmr : force groups + hydrogen mass repartitioning
+
+        These are the files that should be handed to MotorRow / FultonMarket.
+        """
+        base_xml = open(self.final_xml).read()
+
+        # Force-groups only
+        fg_sys = XmlSerializer.deserialize(base_xml)
+        apply_force_groups(fg_sys)
+        with open(self.final_xml_fg, 'w') as f:
+            f.write(XmlSerializer.serialize(fg_sys))
+        print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//' + 'FG system saved to', self.final_xml_fg, flush=True)
+
+        # Force-groups + HMR (operate on the already-FG system)
+        apply_hmr(fg_sys, self.top)
+        with open(self.final_xml_hmr, 'w') as f:
+            f.write(XmlSerializer.serialize(fg_sys))
+        print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//' + 'FG+HMR system saved to', self.final_xml_hmr, flush=True)
 
 
     def choose_analogue_conformer(self):

@@ -54,6 +54,58 @@ def change_resname(pdb_file_in, pdb_file_out, resname_in, resname_out):
 
 
 
+def apply_force_groups(system):
+    """Assign OpenMM force groups for MTS integration.
+
+    Bonded forces → group 0 (cheap, evaluated every step).
+    PME reciprocal space → group 1 (expensive, can be sub-stepped).
+    """
+    for force in system.getForces():
+        force.setForceGroup(0)
+        if isinstance(force, NonbondedForce):
+            force.setReciprocalSpaceForceGroup(1)
+    return system
+
+
+def apply_hmr(system, topology, scale_factors=(2.0, 2.5, 2.5, 2.5)):
+    """Hydrogen Mass Repartitioning (HMR) for non-water atoms.
+
+    Transfers mass from each heavy atom to its covalently bonded hydrogens
+    so that a 4 fs timestep is stable. Water is excluded. Scale factors are
+    indexed by the number of H on the heavy atom (1H→2×, 2-4H→2.5×).
+    Total system mass is conserved.
+    """
+    _water = {'HOH', 'WAT', 'TIP3', 'SOL', 'TIP'}
+
+    # Collect (heavy_index, H_index) for all non-water X-H bonds
+    h_bonds = []
+    for bond in topology.bonds():
+        a1, a2 = bond.atom1, bond.atom2
+        if a1.residue.name in _water or a2.residue.name in _water:
+            continue
+        is_h = [a.element == element.hydrogen for a in (a1, a2)]
+        if not any(is_h):
+            continue
+        h_atom = a2 if is_h[1] else a1
+        heavy_atom = a1 if is_h[1] else a2
+        h_bonds.append((heavy_atom.index, h_atom.index))
+
+    # Count how many H are bonded to each heavy atom
+    h_count = {}
+    for heavy_ind, _ in h_bonds:
+        h_count[heavy_ind] = h_count.get(heavy_ind, 0) + 1
+
+    h_mass = element.hydrogen.mass
+    dH_table = [h_mass * s - h_mass for s in scale_factors]
+
+    for heavy_ind, h_ind in h_bonds:
+        dH = dH_table[min(h_count[heavy_ind] - 1, len(dH_table) - 1)]
+        system.setParticleMass(h_ind, system.getParticleMass(h_ind) + dH)
+        system.setParticleMass(heavy_ind, system.getParticleMass(heavy_ind) - dH)
+
+    return system
+
+
 def describe_system(sys: System):
     box_vecs = sys.getDefaultPeriodicBoxVectors()
     print('Box Vectors')

@@ -152,7 +152,9 @@ def test_bridgeport_full_run(bridgeport_config, tmp_path):
     bp = Bridgeport(bridgeport_config)
     bp.run()
 
-    assert os.path.exists(bp.final_pdb), f"Expected topology PDB at {bp.final_pdb}"
-    assert os.path.exists(bp.final_xml), f"Expected system XML at {bp.final_xml}"
-    assert os.path.getsize(bp.final_pdb) > 0, "Topology PDB is empty"
-    assert os.path.getsize(bp.final_xml) > 0, "System XML is empty"
+    assert os.path.exists(bp.final_pdb),     f"Expected topology PDB at {bp.final_pdb}"
+    assert os.path.exists(bp.final_xml),     f"Expected system XML at {bp.final_xml}"
+    assert os.path.exists(bp.final_xml_fg),  f"Expected FG system XML at {bp.final_xml_fg}"
+    assert os.path.exists(bp.final_xml_hmr), f"Expected FG+HMR system XML at {bp.final_xml_hmr}"
+    for path in (bp.final_pdb, bp.final_xml, bp.final_xml_fg, bp.final_xml_hmr):
+        assert os.path.getsize(path) > 0, f"Output file is empty: {path}"
