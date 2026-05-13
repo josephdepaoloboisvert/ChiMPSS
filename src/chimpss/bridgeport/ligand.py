@@ -23,15 +23,41 @@ from chimpss.bridgeport.ligand_utils import *
 
 
 class Ligand():
+    """Prepare a ligand — either a small molecule or a peptide — for OpenFF parameterisation.
+
+    For small molecules the preparation pipeline is:
+    PDB → rdkit (bond-order assignment from SMILES) → add Hs → write PDB + SDF.
+
+    For peptides the pipeline is:
+    PDB → RepairProtein (Modeller) → pdb2pqr protonation → PDBFixer.
+
+    Parameters
+    ----------
+    working_dir : str
+        Directory where all ligand output files are written.
+    name : str
+        Name for the ligand (no underscores or periods — used in filenames).
+    resname : str, optional
+        Three-letter PDB residue name for small-molecule ligands.
+        Pass ``False`` for peptide ligands.
+    smiles : str, optional
+        SMILES string used for bond-order assignment.
+        Pass ``False`` if unavailable.
+    chainid : str, optional
+        Single-letter chain ID for peptide ligands.
+        Pass ``False`` for small molecules.
+    sequence : str, optional
+        One-letter amino-acid sequence for peptide ligands; used by
+        RepairProtein to fill missing residues.
+    verbose : bool, optional
+        Print detailed diagnostic messages.  Default ``False``.
     """
-    """
+
     def __init__(self, working_dir: str, name: str,
                  resname: str=False, smiles: str=False,
                  chainid: str=False, sequence: str=False,
                  verbose: bool=False):
-        """
-
-        """
+        """Initialise a Ligand and set file paths derived from *working_dir* and *name*."""
 
         # Initialize attributes
         self.working_dir = working_dir
@@ -125,7 +151,33 @@ class Ligand():
                                sanitize: bool=True,
                                removeHs: bool=False,
                                proximityBonding: bool=True):
-        """
+        """Load the ligand as an rdkit ``Mol`` object.
+
+        When both *from_pdb* and *from_smiles* are ``True`` the molecule is
+        read from the PDB file and bond orders are assigned from the SMILES
+        template, giving a fully-typed 3-D molecule.
+
+        Parameters
+        ----------
+        from_pdb : bool, optional
+            Read 3-D coordinates from ``self.pdb``.  Default ``True``.
+        from_smiles : bool, optional
+            Build a template molecule from ``self.smiles`` for bond-order
+            assignment.  Default ``True``.
+        sanitize : bool, optional
+            Sanitize the rdkit molecule.  Default ``True``.
+        removeHs : bool, optional
+            Strip explicit hydrogens.  Default ``False``.
+        proximityBonding : bool, optional
+            Use rdkit proximity-based bonding when reading from PDB.
+            Default ``True``.
+
+        Returns
+        -------
+        rdkit.Chem.Mol or tuple of (Mol, Mol)
+            If both *from_pdb* and *from_smiles* are ``True``, returns
+            ``(template_mol, pdb_mol)``; otherwise returns the single
+            requested molecule.
         """
         # Load molecules
         if from_smiles:
@@ -167,7 +219,12 @@ class Ligand():
 
 
     def return_MDA_sele(self):
-        """
+        """Load the ligand PDB as an MDAnalysis ``AtomGroup``.
+
+        Returns
+        -------
+        MDAnalysis.core.groups.AtomGroup
+            All atoms from ``self.pdb``.
         """
         # Assertions
         assert os.path.exists(self.pdb)
@@ -179,8 +236,7 @@ class Ligand():
 
 
     def _prepare_small_molecule(self):
-        """
-        """
+        """Assign bond orders, add explicit hydrogens, and write PDB + SDF output files."""
         # Load input w/ rdkit
         template, self.mol = self.return_rdkit_mol(sanitize=self.sanitize, removeHs=self.removeHs, proximityBonding=self.proximityBonding)
 
@@ -201,8 +257,7 @@ class Ligand():
 
 
     def _prepare_peptide(self):
-        """
-        """
+        """Repair missing residues with Modeller then protonate the peptide ligand."""
         from chimpss.bridgeport.protein_preparer import ProteinPreparer
         from chimpss.bridgeport.repair_protein import RepairProtein
         from chimpss.shared.io import write_FASTA

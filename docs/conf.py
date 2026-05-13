@@ -1,0 +1,60 @@
+"""Sphinx configuration for ChiMPSS documentation."""
+
+import os
+import sys
+
+# Make the installed package importable without a full environment.
+# On RTD the package is installed via pip (see .readthedocs.yaml), so
+# this path insert is only a local fallback.
+sys.path.insert(0, os.path.abspath('../src'))
+
+# ── Project metadata ─────────────────────────────────────────────────────────
+project = 'ChiMPSS'
+author = 'josephdepaoloboisvert'
+copyright = f'2024, {author}'
+release = '0.1.2'
+
+# ── Extensions ───────────────────────────────────────────────────────────────
+extensions = [
+    'sphinx.ext.autodoc',       # pull docstrings from source
+    'sphinx.ext.napoleon',      # NumPy / Google docstring styles
+    'sphinx.ext.viewcode',      # [source] links next to each item
+    'sphinx.ext.autosummary',   # summary tables
+    'sphinx.ext.intersphinx',   # cross-links to numpy / openmm docs
+]
+
+# ── autodoc ──────────────────────────────────────────────────────────────────
+autodoc_default_options = {
+    'members': True,
+    'undoc-members': False,
+    'private-members': False,
+    'show-inheritance': True,
+}
+autodoc_member_order = 'bysource'
+autodoc_typehints = 'description'
+
+# ── napoleon (NumPy-style docstrings) ────────────────────────────────────────
+napoleon_numpy_docstring = True
+napoleon_google_docstring = False
+napoleon_use_param = True
+napoleon_use_rtype = True
+
+# ── autosummary ──────────────────────────────────────────────────────────────
+autosummary_generate = True
+
+# ── intersphinx ──────────────────────────────────────────────────────────────
+intersphinx_mapping = {
+    'python': ('https://docs.python.org/3', None),
+    'numpy':  ('https://numpy.org/doc/stable', None),
+}
+
+# ── HTML output ──────────────────────────────────────────────────────────────
+html_theme = 'sphinx_rtd_theme'
+html_theme_options = {
+    'navigation_depth': 4,
+    'titles_only': False,
+}
+html_static_path = ['_static']
+
+# ── General ──────────────────────────────────────────────────────────────────
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']

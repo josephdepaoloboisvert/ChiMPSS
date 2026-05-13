@@ -5,6 +5,7 @@ import numpy as np
 
 
 def ensure_exists(directory):
+    """Create *directory* (and any parents) if it does not already exist."""
     if not os.path.isdir(directory):
         os.makedirs(directory)
     return True
@@ -40,16 +41,41 @@ def file_exists_skip(path: str, label: str = '', logger=None) -> bool:
 
 
 def slice_select(traj, selection):
+    """Return an mdtraj sub-trajectory containing only atoms matching *selection*.
+
+    Parameters
+    ----------
+    traj : mdtraj.Trajectory
+    selection : str
+        MDTraj DSL selection string (e.g. ``"protein"``).
+    """
     return traj.atom_slice(traj.top.select(selection))
 
 
 def write_json(dict, json_fn):
+    """Serialise *dict* to a JSON file at *json_fn* with 6-space indentation."""
     import json as _json
     with open(json_fn, 'w') as f:
         _json.dump(dict, f, indent=6)
 
 
 def write_FASTA(sequence, name, fasta_path):
+    """Write a MODELLER-compatible FASTA file.
+
+    Parameters
+    ----------
+    sequence : str
+        One-letter amino-acid sequence (no whitespace).
+    name : str
+        Sequence identifier written into the FASTA header.
+    fasta_path : str
+        Destination file path.
+
+    Returns
+    -------
+    str
+        The resolved *fasta_path* that was written.
+    """
     FASTA = f""">P1;{name}
                  sequence; {name}:::::::::
                  {sequence}*"""
@@ -59,12 +85,37 @@ def write_FASTA(sequence, name, fasta_path):
 
 
 def cif2pdb(cif_fn):
+    """Convert a CIF file to PDB format via OpenBabel.
+
+    Parameters
+    ----------
+    cif_fn : str
+        Path to the input ``.cif`` file.
+
+    Returns
+    -------
+    str
+        Path to the generated ``.obabel.pdb`` file.
+    """
     pdb_fn = cif_fn.replace('.cif', '.obabel.pdb')
     _ = os.system(f'obabel -icif {cif_fn} -opdb -O{pdb_fn}')
     return pdb_fn
 
 
 def remove_dummy_atoms(pdb_file):
+    """Strip ``DUM`` HETATM lines from an OPM-style PDB file.
+
+    Parameters
+    ----------
+    pdb_file : str
+        Path to the input PDB file.
+
+    Returns
+    -------
+    str
+        Path to the cleaned PDB written alongside the input as
+        ``<stem>_no_dummy.pdb``.
+    """
     new_fn = pdb_file.replace('.pdb', '_no_dummy.pdb')
     with open(pdb_file, 'r') as f:
         lines = f.read().split('\n')
@@ -128,6 +179,7 @@ def change_resname(pdb_file_in, pdb_file_out, resname_in, resname_out):
 
 
 def describe_system(sys):
+    """Print box vectors, forces, and particle count for an OpenMM ``System``."""
     box_vecs = sys.getDefaultPeriodicBoxVectors()
     print('Box Vectors')
     [print(box_vec) for box_vec in box_vecs]
@@ -139,6 +191,15 @@ def describe_system(sys):
 
 
 def describe_state(state, name: str = "State"):
+    """Print potential energy and maximum force from an OpenMM ``State``.
+
+    Parameters
+    ----------
+    state : openmm.State
+        State retrieved with ``getEnergy=True`` and ``getForces=True``.
+    name : str, optional
+        Label prepended to the output line.  Default ``"State"``.
+    """
     max_force = max(np.sqrt(v.x**2 + v.y**2 + v.z**2) for v in state.getForces())
     print(f"{name} has energy {round(state.getPotentialEnergy()._value, 2)} kJ/mol ",
           f"with maximum force {round(max_force, 2)} kJ/(mol nm)")

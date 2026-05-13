@@ -2,14 +2,27 @@ from datetime import datetime
 
 
 def timestamp(x):
+    """Return a string of the form ``YYYY-MM-DD HH:MM:SS.ffffff://<x>``."""
     return f"{datetime.now()}://{x}"
 
 
 def printf(x):
+    """Print *x* with a ``MM/DD/YYYY HH:MM:SS//`` timestamp prefix, flushed immediately."""
     print(f"{datetime.now().strftime('%m/%d/%Y %H:%M:%S')}//{x}", flush=True)
 
 
 def unique_residues(t):
+    """Return a dict mapping chain index to a list of unique residue names.
+
+    Parameters
+    ----------
+    t : mdtraj.Trajectory
+
+    Returns
+    -------
+    dict
+        ``{chain_index: [resname, ...]}`` preserving first-seen order.
+    """
     result = {}
     for chain in t.top.chains:
         result[chain.index] = []
@@ -20,6 +33,19 @@ def unique_residues(t):
 
 
 def report_chain_information(traj):
+    """Return a multi-line string summarising chain composition for *traj*.
+
+    Each chain line reports its ID, index, atom count, residue count, and the
+    sorted list of unique residue names found in that chain.
+
+    Parameters
+    ----------
+    traj : mdtraj.Trajectory
+
+    Returns
+    -------
+    str
+    """
     report = [timestamp("Begin Reporting Chain Information")]
     for chain in traj.top.chains:
         report.append(timestamp(

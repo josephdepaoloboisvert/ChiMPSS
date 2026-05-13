@@ -832,7 +832,14 @@ class Bridgeport():
 
 
     def choose_analogue_conformer(self):
-        """
+        """Select the lowest-energy analogue conformer after local minimisation.
+
+        For each conformer written to ``self.analogue.conformer_dir`` the
+        ligand coordinates are inserted into the full system, a short
+        constrained minimisation is performed, and the potential energy is
+        recorded.  The conformer with the lowest PE is copied to
+        ``self.final_pdb``.  All minimised conformers and their energies are
+        kept in ``<sys_dir>/<name>_minimized_conformers/``.
         """
 
         def _minimize_new_lig_coords(ref_traj, lig_sele, conf_path, lig_resname='UNL', min_out_pdb=None):

@@ -26,15 +26,44 @@ from chimpss.bridgeport.ligand_utils import *
 
 
 class Analogue(Ligand):
-    """
+    """Prepare an analogue ligand by aligning it to a known experimental template.
+
+    Inherits from :class:`Ligand`.  The typical workflow is:
+
+    1. Call :meth:`get_MCS` to detect the maximum common substructure (MCS)
+       between the analogue SMILES and the template's experimental coordinates.
+    2. Optionally refine the MCS mapping with ``add_atoms`` / ``remove_atoms``.
+    3. Call :meth:`generate_conformers` to produce n 3-D conformers of the
+       analogue placed inside the binding site via torsion matching + alignment.
+
+    Parameters
+    ----------
+    template : Ligand
+        The experimental (template) ligand object whose coordinates define the
+        binding pose.
+    working_dir : str
+        Directory where analogue PDB, SDF, and conformer files will be written.
+    name : str
+        Name for the analogue molecule (no underscores or periods).
+    resname : str, optional
+        PDB residue name.  Pass ``False`` if not applicable.
+    smiles : str, optional
+        SMILES string for the analogue.
+    chainid : str, optional
+        Chain ID if the analogue is a peptide.  Pass ``False`` otherwise.
+    sequence : str, optional
+        Amino-acid sequence string for peptide analogues.
+    verbose : bool, optional
+        Print detailed alignment diagnostics.  Default ``False``.
+    visualize : bool, optional
+        Render 2-D structures and MCS highlights in Jupyter.  Default ``True``.
     """
 
     def __init__(self, template: Ligand, working_dir: str, name: str,
                      resname: str=False, smiles: str=False,
                      chainid: str=False, sequence: str=False,
                      verbose: bool=False, visualize: bool=True):
-        """
-        """
+        """Initialize an Analogue by extending the parent Ligand constructor."""
 
         # Initialize inheritated attributes
         super().__init__(working_dir, name, resname, smiles, chainid, sequence, verbose)
@@ -58,7 +87,34 @@ class Analogue(Ligand):
                 from_smiles: bool=True,
                 sanitize: bool=True,
                 proximityBonding: bool=True):
-        """
+        """Detect the maximum common substructure between analogue and template.
+
+        Builds rdkit molecules for both ligands, runs MCS detection, and
+        optionally adjusts the mapping with user-supplied atom index lists.
+        When ``visualize=True`` (set on the instance) the analogue and template
+        are rendered side-by-side with matched atoms highlighted.
+
+        Parameters
+        ----------
+        subImgSize : tuple, optional
+            Pixel dimensions ``(width, height)`` for the 2-D structure grid image.
+        add_atoms : list of [int, int], optional
+            Extra atom-pair mappings to append to the automatic MCS.  Each
+            element is ``[analogue_idx, template_idx]``.
+        remove_atoms : list of int, optional
+            Analogue atom indices to drop from the automatic MCS mapping.
+        strict : bool, optional
+            Require strict atom-type matching in the MCS search.  Default ``False``.
+        removeHs : bool, optional
+            Strip explicit hydrogens before MCS detection.  Default ``True``.
+        from_pdb : bool, optional
+            Load the analogue molecule from its PDB file.  Default ``False``.
+        from_smiles : bool, optional
+            Build the analogue molecule from ``self.smiles``.  Default ``True``.
+        sanitize : bool, optional
+            Sanitize the rdkit molecule after loading.  Default ``True``.
+        proximityBonding : bool, optional
+            Use proximity-based bonding when reading from PDB.  Default ``True``.
         """
 
         # Set attributes
@@ -116,7 +172,25 @@ class Analogue(Ligand):
 
 
     def generate_conformers(self, n_conformers: int=1, align_all: bool=False, rmsd_thresh: float=3.0):
-        """
+        """Generate analogue conformers placed inside the template binding site.
+
+        Embeds the analogue molecule, matches internal coordinates to the
+        template's MCS atoms, and aligns the result.  Only conformers whose
+        RMSD to the template alignment atoms falls below ``rmsd_thresh`` are
+        accepted.  Accepted conformers are written to ``self.conformer_dir``;
+        the first conformer is also saved as ``self.pdb``.
+
+        Parameters
+        ----------
+        n_conformers : int, optional
+            Number of accepted conformers to generate.  Default ``1``.
+        align_all : bool, optional
+            If ``True``, use the full MCS (``matching_inds``) for the final
+            superposition step rather than the auto-detected alignment subset.
+            Default ``False``.
+        rmsd_thresh : float, optional
+            Maximum RMSD (Å) between aligned analogue and template atoms for
+            a conformer to be accepted.  Default ``3.0``.
         """
 
         # Run setup methods
@@ -190,7 +264,13 @@ class Analogue(Ligand):
 
 
     def _load_molecules(self, load_template: bool=False):
-        """
+        """Embed the analogue rdkit molecule and optionally reload the template.
+
+        Parameters
+        ----------
+        load_template : bool, optional
+            If ``True``, also reload ``self.template_mol`` from its PDB file
+            and build ``self.template_sele`` as an MDAnalysis AtomGroup.
         """
         # Store bond orders from SMILES and save to .pdb for MDAnalysis
         self.mol = embed_rdkit_mol(self.mol, self.mol)
@@ -210,7 +290,11 @@ class Analogue(Ligand):
 
 
     def _get_MDA_atoms(self):
-        """
+        """Translate rdkit atom indices to MDAnalysis atom names and residue IDs.
+
+        Populates ``align_atoms``, ``template_align_atoms``,
+        ``matching_atoms``, and ``template_matching_atoms`` / residue id
+        counterparts used by :meth:`_make_selections`.
         """
         # Translate atoms for alignment
         self.align_atoms, _ = translate_rdkit_inds(self.mol, self.align_inds)
@@ -224,7 +308,13 @@ class Analogue(Ligand):
 
 
     def _add_atoms_to_MCS(self, add_atoms):
-        """
+        """Append user-specified atom pairs to the MCS mapping.
+
+        Parameters
+        ----------
+        add_atoms : list of [int, int]
+            Each element is ``[analogue_idx, template_idx]`` to be added to
+            ``self.matching_inds`` and ``self.template_matching_inds``.
         """
 
         # Add atoms
@@ -237,7 +327,14 @@ class Analogue(Ligand):
 
 
     def _remove_atoms_from_MCS(self, remove_atoms):
-        """
+        """Remove user-specified analogue atoms from the MCS mapping.
+
+        Parameters
+        ----------
+        remove_atoms : list of int
+            Analogue atom indices to drop from ``self.matching_inds``; the
+            paired template atom is removed from
+            ``self.template_matching_inds`` automatically.
         """
         # Remove user specified atoms
         for atom in remove_atoms:
@@ -255,7 +352,12 @@ class Analogue(Ligand):
 
 
     def _make_selections(self):
-        """
+        """Build MDAnalysis AtomGroup selections for alignment and torsion matching.
+
+        Populates ``self.sele``, ``self.align_sele``,
+        ``self.template_align_sele``, ``self.matching_sele``, and
+        ``self.template_matching_sele`` from the atom name/residue ID lists
+        set by :meth:`_get_MDA_atoms`.
         """
         # Make selections
         self.sele = self.return_MDA_sele()
@@ -267,6 +369,7 @@ class Analogue(Ligand):
 
 
     def visualize_alignment(self):
+        """Render a 3-D overlay of the analogue (blue) and template (yellow) in py3Dmol."""
         import py3Dmol
         view = py3Dmol.view()
         print(f'BLUE: {self.name}')
