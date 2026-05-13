@@ -20,7 +20,6 @@ from copy import deepcopy
 from typing import List
 
 warnings.filterwarnings("ignore")
-import py3Dmol
 
 from chimpss.bridgeport.ligand import Ligand
 from chimpss.bridgeport.ligand_utils import *
@@ -268,6 +267,7 @@ class Analogue(Ligand):
 
 
     def visualize_alignment(self):
+        import py3Dmol
         view = py3Dmol.view()
         print(f'BLUE: {self.name}')
         print(f'YELLOW: {self.template.name}')
