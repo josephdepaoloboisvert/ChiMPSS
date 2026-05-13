@@ -79,7 +79,7 @@ class MotorRow():
         self.ligand_name = validate_name(ligand_name) if ligand_name else None
 
 
-    def main(self, pdb_in, restrain_step_5: bool=False, step_5_nsteps: int=1250000):
+    def main(self, pdb_in, restrain_step_5: bool=False, step_5_nsteps: int=1250000, dt: float=2.0):
         """
         Run the standard five step equilibration
         0 - Minimization
@@ -106,7 +106,7 @@ class MotorRow():
         if file_exists_skip(min_xml, 'MotorRow minimization'):
             state_fn, pdb_fn = min_xml, min_pdb
         else:
-            state_fn, pdb_fn = self._minimize(pdb_in)
+            state_fn, pdb_fn = self._minimize(pdb_in, dt=dt)
 
         # Steps 1–5: (stepnum, nsteps, restrain_lig)
         step_configs = [
@@ -124,7 +124,8 @@ class MotorRow():
             else:
                 state_fn, pdb_fn = self._run_step(state_fn, stepnum, nsteps=nsteps,
                                                    positions_from_pdb=pdb_fn,
-                                                   restrain_lig=restrain_lig)
+                                                   restrain_lig=restrain_lig,
+                                                   dt=dt)
 
         # If protein/ligand names were provided, rename final outputs with the new convention
         if self.protein_name and self.ligand_name:
@@ -372,13 +373,13 @@ class MotorRow():
         if fn_dcd is None:
             fn_dcd = os.path.join(self.abs_work_dir, f'step_{stepnum}.dcd')
 
-        SDR = app.StateDataReporter(fn_stdout, nstdout, step=True, time=True,
-                                    potentialEnergy=True, temperature=True, progress=False,
-                                    remainingTime=True, speed=True, volume=True,
-                                    totalSteps=nsteps, separator=' : ')
+        SDR = StateDataReporter(fn_stdout, nstdout, step=True, time=True,
+                                potentialEnergy=True, temperature=True, progress=False,
+                                remainingTime=True, speed=True, volume=True,
+                                totalSteps=nsteps, separator=' : ')
 
         simulation.reporters.append(SDR)
-        DCDR = app.DCDReporter(file=fn_dcd, reportInterval=ndcd, append=append_dcd, enforcePeriodicBox=True)
+        DCDR = DCDReporter(file=fn_dcd, reportInterval=ndcd, append=append_dcd, enforcePeriodicBox=True)
         simulation.reporters.append(DCDR)
         print(f'Starting Step {stepnum} with forces {simulation.system.getForces()}')
         print(f'Starting Step {stepnum} with box_vectors {simulation.system.getDefaultPeriodicBoxVectors()}')

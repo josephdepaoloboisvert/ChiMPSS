@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: chimpss
-Version: 0.1.0
+Version: 0.1.2
 Summary: Chicago Membrane Protein Simulation Suite — 3-stage MD pipeline (Bridgeport → MotorRow → FultonMarket)
 Requires-Python: >=3.8
 Provides-Extra: dev

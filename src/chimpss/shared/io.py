@@ -43,6 +43,12 @@ def slice_select(traj, selection):
     return traj.atom_slice(traj.top.select(selection))
 
 
+def write_json(dict, json_fn):
+    import json as _json
+    with open(json_fn, 'w') as f:
+        _json.dump(dict, f, indent=6)
+
+
 def write_FASTA(sequence, name, fasta_path):
     FASTA = f""">P1;{name}
                  sequence; {name}:::::::::
