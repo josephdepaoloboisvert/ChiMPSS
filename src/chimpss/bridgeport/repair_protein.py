@@ -5,14 +5,18 @@ from typing import List
 
 import MDAnalysis as mda
 import mdtraj as md
-import modeller
 import numpy as np
-from modeller import *
-from modeller.automodel import *
 from openmm.app import PDBFile
 from pdbfixer import PDBFixer
 
-modeller.log.none()
+try:
+    import modeller
+    from modeller import *
+    from modeller.automodel import *
+    modeller.log.none()
+    _modeller_available = True
+except ImportError:
+    _modeller_available = False
 
 class RepairProtein():
     """
