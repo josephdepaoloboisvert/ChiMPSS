@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 #MotorRow
 import math
 import os
@@ -20,16 +22,18 @@ from chimpss.shared.io import build_output_path, file_exists_skip, validate_name
 
 class MotorRow():
     """
-    A Class for Equilibration of Membrane Proteins
-    Follows a five-step protocol
-        0 - Minimization
-        1 - NVT with restraints on Membrane Z and Protein XYZ 250ps
-        2 - NPT with restraints on Membrane Z and Protein XYZ 250ps
-        3 - NVT with no restraints 250 ps
-        4 - NPT with no restraints (MonteCarloMembraneBarostat) 2.5ns
-        5 - NPT with no restraints (MonteCarloBarostat) 2.5ns
+    A Class for Equilibration of Membrane Proteins.
 
-        Common - dt=2.0fs ; Temp=300K ; Platform=OpenCL ; 1000 step stdout ; 5000 step dcd ;
+    Follows a five-step protocol:
+
+    - 0: Minimization
+    - 1: NVT with restraints on Membrane Z and Protein XYZ (250 ps)
+    - 2: NPT with restraints on Membrane Z and Protein XYZ (250 ps)
+    - 3: NVT with no restraints (250 ps)
+    - 4: NPT with no restraints, MonteCarloMembraneBarostat (2.5 ns)
+    - 5: NPT with no restraints, MonteCarloBarostat (2.5 ns)
+
+    Common settings: dt=2.0 fs, Temp=300 K, Platform=OpenCL.
     """
 
     def __init__(self, pdb_file, system_xml, working_directory, lig_resname: str='UNK', lig_chain: str=None,

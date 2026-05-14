@@ -40,6 +40,7 @@ autodoc_mock_imports = [
     # MPI
     "mpi4py",
     # Data / numerics
+    "numpy",
     "scipy",
     "sklearn",
     "joblib",

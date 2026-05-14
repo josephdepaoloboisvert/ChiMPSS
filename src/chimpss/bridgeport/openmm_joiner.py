@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 #OpenFF
 #OpenMM
 from openmm import *
