@@ -158,16 +158,11 @@ class FultonMarket():
             previous checkpoint pairwise distance distribution for convergence.
             Default 0.10.
         getContacts_Info : dict, optional
-            Keyword arguments forwarded to getContactDistanceMatrix. Required
-            keys when contact convergence is used:
-              - getcontacts_script (str): path to get_dynamic_contacts.py
-              - conda_env (str): name of the conda env containing getContacts;
-                the current env is auto-discovered from CONDA_PREFIX and its
-                name is replaced with this value to locate the interpreter
-            Optional keys:
-              - getcontacts_python (str): explicit Python interpreter path;
-                when provided, conda_env is ignored
-              - cores (int): number of CPU cores for getContacts, default 10
+            Keyword arguments forwarded to getContactDistanceMatrix.
+            Required keys: ``getcontacts_script`` (path to
+            get_dynamic_contacts.py), ``conda_env`` (conda env name
+            containing getContacts). Optional keys: ``getcontacts_python``
+            (explicit interpreter path), ``cores`` (CPU cores, default 10).
             If None, contact distance matrix convergence will raise an error
             when first attempted.
         """

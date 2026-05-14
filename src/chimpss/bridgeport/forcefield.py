@@ -15,11 +15,14 @@ from openmm import *
 from openmm.app import *
 from openmm.unit import *
 
-nonbonded_methods = {'NoCutoff': NoCutoff,
-                     'CutoffNonPeriodic': CutoffNonPeriodic,
-                     'CutoffPeriodic': CutoffPeriodic,
-                     'Ewald': Ewald,
-                     'PME': PME}
+try:
+    nonbonded_methods = {'NoCutoff': NoCutoff,
+                         'CutoffNonPeriodic': CutoffNonPeriodic,
+                         'CutoffPeriodic': CutoffPeriodic,
+                         'Ewald': Ewald,
+                         'PME': PME}
+except NameError:
+    nonbonded_methods = {}
 
 
 class ForceFieldHandler():

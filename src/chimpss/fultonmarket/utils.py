@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import itertools
 import math
 import os
@@ -39,7 +41,10 @@ def geometric_distribution(min_val, max_val, n_vals):
             for i in range(n_vals)]
 
 
-spring_constant_unit = (unit.joule)/(unit.angstrom*unit.angstrom*unit.mole)
+try:
+    spring_constant_unit = (unit.joule)/(unit.angstrom*unit.angstrom*unit.mole)
+except TypeError:
+    spring_constant_unit = None
 
 perms = jnp.array([x for x in itertools.product([-1, 0, 1], repeat=3)])
 

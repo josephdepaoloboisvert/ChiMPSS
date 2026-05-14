@@ -48,24 +48,6 @@ class RepairProtein():
             Path for saving the repaired .pdb file.
 
 
-    Methods
-    init(self, pdb_fn: str, fasta_fn: str, working_dir: str='./'):
-        Initializes the repair process by setting up file paths and directories.
-
-    run(self, pdb_out_fn: str, tails: List=False, nstd_resids: List=None, loops: List=False, verbose: bool=False):
-        Executes the repair, including homology modeling and optional loop optimization. Allows for verbose output detailing missing and mutated residues.
-
-    run_with_secondary(self, secondary_template_pdb: str, pdb_out_fn: str, tails: bool=False, loops: List=None):
-        Executes the repair using a secondary structure template to guide the modeling of missing secondary structures.
-
-    _align_sequences(self):
-        Aligns the template and target sequences to identify missing or mutated residues.
-
-    _build_homology_model(self, nstd_resids):
-        Constructs a homology model using UCSF Modeller, incorporating non-standard residues if specified.
-
-    _optimize_loops(self, loops):
-        Optimizes specified loop regions within the protein model.
     """
 
 
