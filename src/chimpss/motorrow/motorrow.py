@@ -96,6 +96,14 @@ class MotorRow():
             state_fn: string: path to the XML serialized state file
             pdb_fn: string: path to the final structure of the equilibration simulation.
         """
+        # Early exit if the fully-renamed final outputs already exist (e.g. restart after completion)
+        if self.protein_name and self.ligand_name:
+            final_pdb = build_output_path(self.abs_work_dir, self.protein_name, self.ligand_name, 'equil', 'pdb')
+            final_xml = build_output_path(self.abs_work_dir, self.protein_name, self.ligand_name, 'state', 'xml')
+            if os.path.exists(final_pdb) and os.path.exists(final_xml):
+                print(f'[skip] MotorRow already complete — {final_pdb} exists')
+                return final_xml, final_pdb
+
         if not os.path.isabs(pdb_in):
             shutil.copy(pdb_in, os.path.join(self.abs_work_dir, pdb_in))
             pdb_in = os.path.join(self.abs_work_dir, pdb_in)
@@ -228,7 +236,7 @@ class MotorRow():
         system = restrain_atoms(system, crds, np.array(prt_heavy_atoms), rst_name='prot_k', rst_strength=86.68*(joule)/(angstrom*angstrom*mole))
 
         integrator = LangevinMiddleIntegrator(temp*kelvin, 1/picosecond, dt*femtosecond)
-        simulation = Simulation(self.topology, system, integrator)
+        simulation = Simulation(self.topology, system, integrator, Platform.getPlatformByName('OpenCL'))
         simulation.context.setPositions(positions)
         self._describe_state(simulation, "Original state")
         simulation.minimizeEnergy()
@@ -356,7 +364,7 @@ class MotorRow():
 
         # Any Step Establish Simulation
         integrator = LangevinMiddleIntegrator(temp*kelvin, 1/picosecond, dt*femtosecond)
-        simulation = Simulation(self.topology, system, integrator)
+        simulation = Simulation(self.topology, system, integrator, Platform.getPlatformByName('OpenCL'))
 
         # Load Positions
         if stepnum == 1:
