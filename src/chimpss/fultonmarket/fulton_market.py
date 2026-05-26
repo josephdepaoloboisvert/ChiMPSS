@@ -117,7 +117,8 @@ class FultonMarket():
             max_equil_fraction: float = 0.75,
             frobenius_thresh: float = 0.05,
             jsd_thresh: float = 0.10,
-            getContacts_Info: dict = None):
+            getContacts_Info: dict = None,
+            skip_contacts: bool = False):
         """
         Run parallel tempering replica exchange.
 
@@ -163,8 +164,12 @@ class FultonMarket():
             get_dynamic_contacts.py), ``conda_env`` (conda env name
             containing getContacts). Optional keys: ``getcontacts_python``
             (explicit interpreter path), ``cores`` (CPU cores, default 10).
-            If None, contact distance matrix convergence will raise an error
-            when first attempted.
+            If None and skip_contacts is False, contact matrix computation
+            will raise a RuntimeError when first attempted.
+        skip_contacts : bool
+            If True, skip the contact distance matrix in convergence checking.
+            Contact convergence is then treated as passing. Must be explicitly
+            set to True — contacts are required by default. Default False.
         """
 
         # Store run parameters
@@ -180,6 +185,7 @@ class FultonMarket():
         self.frobenius_thresh = frobenius_thresh
         self.jsd_thresh = jsd_thresh
         self.getContacts_Info = getContacts_Info if getContacts_Info is not None else {}
+        self.skip_contacts = skip_contacts
 
         # Prepare output directories
         self.output_dir = output_dir
@@ -211,6 +217,7 @@ class FultonMarket():
         printf(f'frobenius_thresh    : {self.frobenius_thresh}')
         printf(f'jsd_thresh          : {self.jsd_thresh}')
         printf(f'getContacts_Info    : {self.getContacts_Info}')
+        printf(f'skip_contacts       : {self.skip_contacts}')
 
         self._configure_experiment_parameters()
 
@@ -232,6 +239,7 @@ class FultonMarket():
                 frobenius_thresh=self.frobenius_thresh,
                 jsd_thresh=self.jsd_thresh,
                 getContacts_Info=self.getContacts_Info,
+                skip_contacts=self.skip_contacts,
             )
             self.sim_no += 1
 
@@ -471,7 +479,7 @@ class FultonMarket():
         return velocities, positions, box_vectors, state_inds
 
 
-    def _evaluate_stopping_criterion(self, n_resample=1000, max_equil_fraction=0.75, frobenius_thresh=0.05, jsd_thresh=0.10, getContacts_Info=None):
+    def _evaluate_stopping_criterion(self, n_resample=1000, max_equil_fraction=0.75, frobenius_thresh=0.05, jsd_thresh=0.10, getContacts_Info=None, skip_contacts=False):
         """
         Check whether the simulation should stop by evaluating a series of
         convergence criteria against the current and all previously saved
@@ -513,6 +521,11 @@ class FultonMarket():
         bool
             True if the simulation should stop.
         """
+        at_max_time = self.total_sim_time is not None and self.sim_no >= self.total_n_sims
+        if at_max_time:
+            printf("Max simulation time reached — skipping convergence checks.")
+            return True
+
         printf("Gathering convergence related data...")
         analyzer = FultonMarketAnalysis(input_dir=self.output_dir, pdb=self.input_pdb, sele_str=self.sele_str)
 
@@ -536,17 +549,21 @@ class FultonMarket():
         # Compute current distance matrices
         torsional    = getTorsionalDistanceMatrix(traj, selection_string='protein or resname UNK')
         alpha_carbon = getAlphaCarbonDistanceMatrix(traj, selection_string='protein or resname UNK')
-        contact_distance, _ = getContactDistanceMatrix(
-            top_fn=os.path.join(sim_dir, 'resampled_top.pdb'),
-            traj_fn=os.path.join(sim_dir, 'resampled_trj.dcd'),
-            output_fn=os.path.join(sim_dir, 'resampled_contacts.tsv'),
-            **(getContacts_Info if getContacts_Info is not None else {}),
-        )
         current_matrices = {
             'torsion':      torsional,
             'alpha_carbon': alpha_carbon,
-            'contact':      contact_distance,
         }
+
+        if not skip_contacts:
+            contact_distance, _ = getContactDistanceMatrix(
+                top_fn=os.path.join(sim_dir, 'resampled_top.pdb'),
+                traj_fn=os.path.join(sim_dir, 'resampled_trj.dcd'),
+                output_fn=os.path.join(sim_dir, 'resampled_contacts.tsv'),
+                **(getContacts_Info if getContacts_Info is not None else {}),
+            )
+            current_matrices['contact'] = contact_distance
+        else:
+            printf("skip_contacts=True — contact distance matrix omitted from convergence check.")
 
         # Save current matrices
         for name, matrix in current_matrices.items():
@@ -584,16 +601,14 @@ class FultonMarket():
             for name in current_matrices
         }
 
-        # Build checks
-        at_max_time     = self.total_sim_time is not None and self.sim_no >= self.total_n_sims
+        # Build checks (at_max_time already handled above with early return)
         past_minimum    = self.sim_no >= (self.total_n_sims * self.minimum_fraction4convergence)
         equil_ok        = equil_fraction < max_equil_fraction
         torsion_ok      = matrix_converged['torsion']
         alpha_carbon_ok = matrix_converged['alpha_carbon']
-        contact_ok      = matrix_converged['contact']
+        contact_ok      = matrix_converged.get('contact', True)
 
         checks = [
-            ('Max simulation time reached',      at_max_time),
             ('Past minimum simulation fraction', past_minimum),
             ('Equilibration discard < 75%',      equil_ok),
             ('Torsion matrix converged',         torsion_ok),
@@ -624,8 +639,7 @@ class FultonMarket():
                 printf(f"  {name:>12} -- no previous matrices to compare")
         printf("=" * (width + 12))
 
-        # Stop if at max time, or if all convergence checks pass
-        convergence_checks = [result for _, result in checks[1:]]
-        if at_max_time or all(convergence_checks):
+        # Stop if all convergence checks pass (at_max_time exits early above)
+        if all(result for _, result in checks):
             return True
         return False

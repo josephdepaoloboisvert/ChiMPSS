@@ -4,3 +4,5 @@ __version__ = "0.1.2"
 #   Phase 2: from chimpss.bridgeport import Bridgeport
 #   Phase 3: from chimpss.motorrow import MotorRow
 #   Phase 4: from chimpss.fultonmarket import FultonMarket
+
+from chimpss.algdock import BindingPMF
