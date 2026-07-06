@@ -28,7 +28,8 @@ dependencies:
   - numpy
   - scipy
   - scikit-learn
-  - jax             # CPU build — override with pip jax[cuda12] for GPU
+  - jax             
+  - "jaxlib=*=*cuda*"
   - flax            # Flax neural network library (used by chimpss.neural_nets)
   - optax           # JAX optimizer library
 
