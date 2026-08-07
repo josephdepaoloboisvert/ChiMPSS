@@ -1,7 +1,48 @@
+import os
+
 import numpy as np
 from openmm import *
 from openmm.app import *
 from openmm.unit import *
+
+
+def select_platform(preferred: str = None):
+    """Return the fastest available OpenMM Platform, preferring CUDA.
+
+    Order of preference: an explicit ``preferred`` name (or the
+    ``CHIMPSS_PLATFORM`` environment variable), then CUDA, OpenCL, CPU,
+    Reference.  Raises if none of those are registered.
+
+    MotorRow previously hardcoded ``Platform.getPlatformByName('OpenCL')``,
+    which fails outright on builds where the OpenCL plugin is present but no
+    OpenCL ICD is installed -- the common case on NVIDIA HPC nodes.
+    """
+    available = {Platform.getPlatform(i).getName()
+                 for i in range(Platform.getNumPlatforms())}
+
+    order = []
+    explicit = preferred or os.environ.get('CHIMPSS_PLATFORM')
+    if explicit:
+        order.append(explicit)
+    order += ['CUDA', 'OpenCL', 'CPU', 'Reference']
+
+    for name in order:
+        if name in available:
+            if explicit and name != explicit:
+                print(f'MotorRow: requested platform {explicit!r} unavailable, '
+                      f'falling back to {name!r}', flush=True)
+            return Platform.getPlatformByName(name)
+
+    raise RuntimeError(
+        f'No usable OpenMM platform. Requested order {order}, '
+        f'available {sorted(available)}.')
+
+
+def platform_properties(platform):
+    """Mixed precision for CUDA/OpenCL; nothing for CPU/Reference."""
+    if platform.getName() in ('CUDA', 'OpenCL'):
+        return {'Precision': 'mixed'}
+    return {}
 
 
 def get_positions_from_pdb(fname_pdb, lig_resname: str=None, lig_chain: str=None):

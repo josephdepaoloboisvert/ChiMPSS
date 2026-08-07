@@ -14,7 +14,9 @@ from openmm.unit import *
 
 from chimpss.motorrow.utils import (
     get_positions_from_pdb,
+    platform_properties,
     restrain_atoms,
+    select_platform,
     unpack_infiles,
 )
 from chimpss.shared.io import build_output_path, file_exists_skip, validate_name
@@ -33,7 +35,10 @@ class MotorRow():
     - 4: NPT with no restraints, MonteCarloMembraneBarostat (2.5 ns)
     - 5: NPT with no restraints, MonteCarloBarostat (2.5 ns)
 
-    Common settings: dt=2.0 fs, Temp=300 K, Platform=OpenCL.
+    Common settings: dt=2.0 fs, Temp=300 K.  The OpenMM platform is chosen by
+    ``chimpss.motorrow.utils.select_platform`` (CUDA preferred, then OpenCL,
+    CPU, Reference); override with the ``CHIMPSS_PLATFORM`` environment
+    variable.
     """
 
     def __init__(self, pdb_file, system_xml, working_directory, lig_resname: str='UNK', lig_chain: str=None,
@@ -248,7 +253,10 @@ class MotorRow():
         system = restrain_atoms(system, crds, np.array(prt_heavy_atoms), rst_name='prot_k', rst_strength=86.68*(joule)/(angstrom*angstrom*mole))
 
         integrator = LangevinMiddleIntegrator(temp*kelvin, 1/picosecond, dt*femtosecond)
-        simulation = Simulation(self.topology, system, integrator, Platform.getPlatformByName('OpenCL'))
+        platform = select_platform()
+        print(f'MotorRow minimization on platform: {platform.getName()}', flush=True)
+        simulation = Simulation(self.topology, system, integrator, platform,
+                                platform_properties(platform))
         simulation.context.setPositions(positions)
         self._describe_state(simulation, "Original state")
         simulation.minimizeEnergy()
@@ -376,7 +384,10 @@ class MotorRow():
 
         # Any Step Establish Simulation
         integrator = LangevinMiddleIntegrator(temp*kelvin, 1/picosecond, dt*femtosecond)
-        simulation = Simulation(self.topology, system, integrator, Platform.getPlatformByName('OpenCL'))
+        platform = select_platform()
+        print(f'MotorRow step {stepnum} on platform: {platform.getName()} (dt={dt} fs)', flush=True)
+        simulation = Simulation(self.topology, system, integrator, platform,
+                                platform_properties(platform))
 
         # Load Positions
         if stepnum == 1:

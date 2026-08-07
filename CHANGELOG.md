@@ -3,7 +3,73 @@
 All notable changes to ChiMPSS are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased] — AlGDock BPMF engine, neural nets, fixes, and repo cleanup
+## [Unreleased] — Manuscript-replication fixes, motif/statistics analysis, HMR test coverage
+
+Everything here was found while preparing the ChiMPSS manuscript replication
+campaign. Each item is a defect that would have broken, silently biased, or
+made unreproducible a production run.
+
+### Fixed
+
+- **`MotorRow` could not start on an NVIDIA node.** `motorrow.py` hardcoded
+  `Platform.getPlatformByName('OpenCL')` in both `_minimize` and `_run_step`.
+  Where the OpenCL plugin ships but no OpenCL ICD is installed — the ordinary
+  case on HPC GPU nodes, including SDSC Expanse, whose OpenMM build registers
+  only Reference/CPU/CUDA — this raises outright. Replaced with
+  `chimpss.motorrow.utils.select_platform()`: CUDA preferred, then OpenCL, CPU,
+  Reference, overridable via `CHIMPSS_PLATFORM`, with mixed precision applied
+  on accelerator platforms by `platform_properties()`.
+  `CHANGELOG` had previously claimed this fix landed; it had not.
+- **`chimpss-generate-pca` produced a non-reproducible coordinate frame.** All
+  structures were superposed onto `selected[0]` — whichever survived filtering
+  first, which depends on dict iteration order — so two runs over identical
+  inputs could yield different PCA spaces. Added `--reference <PDB_CODE>` to
+  pin the superposition target (e.g. `2RH1`). Existing defaults unchanged; the
+  flag is opt-in.
+
+### Added
+
+- **`chimpss-motorrow --dt`** (plus `--step_5_nsteps`, `--restrain_step_5`).
+  `MotorRow.main()` has always accepted a timestep, but no console-script flag
+  exposed it, so the hydrogen-mass-repartitioned system XML that Bridgeport
+  writes unconditionally could not be driven from a batch job at all.
+- **`chimpss.analysis.motifs`** — the five class-A activation motifs the
+  manuscript reports but which existed nowhere in the package: the 3.50–6.34 Cα
+  distance, NPxxY backbone RMSD against a TM1–TM4 frame, the TM7–helix 8
+  junction, the W6.48 χ1 toggle switch and the DRY ionic lock. Keyed by
+  Ballesteros–Weinstein label via the existing `gpcr_pca` machinery, so the
+  numbering matches the PCA projection exactly. Unmeasurable motifs return NaN
+  rather than raising — most receptors lack an acidic residue at 6.30.
+- **`chimpss.analysis.run_stats`** — assembles the composition and production
+  tables. Notably recovers mean nearest-neighbour exchange acceptance from the
+  reporter: it was computed inside `Randolph._eval_acc_rates` purely to drive
+  state insertion and never persisted anywhere.
+- **`chimpss-motifs`** and **`chimpss-run-stats`** console scripts.
+
+### Tests
+
+Unit suite grows from 173 to 210.
+
+- `tests/unit/test_bridgeport/test_hmr.py` (16 tests) — pins the HMR
+  arithmetic, which previously had **zero** coverage; `test_bridgeport_e2e.py`
+  only checked the output file was non-empty. `apply_hmr` scales hydrogens to
+  **2.0×** (heavy atoms carrying one H) and **2.5×** (two or more), i.e. 2.016
+  and 2.520 Da, conserving mass exactly and excluding water. Note this differs
+  from the published Methods, which describe 3.0×/3.5× (3.02–3.53 Da) — that
+  corresponds to transferring `s · m_H` instead of `(s − 1) · m_H`, one whole
+  hydrogen mass too much. A test asserts the manuscript values are *not*
+  produced, so the discrepancy cannot be reintroduced silently.
+- `tests/unit/test_motorrow/test_platform.py` (14 tests) — platform preference,
+  fallback chain, env/argument override, and a guard that the hardcoded OpenCL
+  lookup is not reintroduced.
+- `tests/unit/test_cli/test_argument_plumbing.py` (22 tests) — `--dt` parses,
+  types correctly and reaches `MotorRow.main`; `--reference` exists without
+  moving any existing default; all ten entry points import and are declared in
+  `pyproject.toml`.
+- `tests/unit/test_analysis/test_motifs.py` (13 tests) — dihedral and Kabsch
+  geometry, including that superposition never reflects, plus the NaN contract.
+
+## [Previous Unreleased] — AlGDock BPMF engine, neural nets, fixes, and repo cleanup
 
 ### Added
 - `src/chimpss/algdock/`: full vendored AlGDock BPMF engine (no external package required).

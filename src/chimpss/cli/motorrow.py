@@ -19,6 +19,15 @@ def parse_args():
                    help='Directory to store output')
     p.add_argument('--lig_resname', default='UNK', type=str,
                    help='Three-letter residue name for the ligand (default: UNK)')
+    p.add_argument('--dt', default=2.0, type=float,
+                   help='Integration timestep in fs (default: 2.0). Raise only when the '
+                        'supplied system XML has been hydrogen-mass repartitioned.')
+    p.add_argument('--step_5_nsteps', default=1250000, type=int,
+                   help='Steps in the final unrestrained NPT stage (default: 1250000 = '
+                        '2.5 ns at 2 fs). Durations are step-based, so physical time '
+                        'scales with --dt.')
+    p.add_argument('--restrain_step_5', action='store_true',
+                   help='Keep ligand heavy-atom restraints through step 5.')
     p.add_argument('--protein-name', default=None, type=str,
                    help='Protein name for output file naming (no underscores or periods). '
                         'When combined with --ligand-name, final outputs are named '
@@ -37,7 +46,10 @@ def main():
              working_directory=args.output_dir,
              lig_resname=args.lig_resname,
              protein_name=args.protein_name,
-             ligand_name=args.ligand_name).main(args.pdb_file)
+             ligand_name=args.ligand_name).main(args.pdb_file,
+                                                restrain_step_5=args.restrain_step_5,
+                                                step_5_nsteps=args.step_5_nsteps,
+                                                dt=args.dt)
 
 
 if __name__ == '__main__':

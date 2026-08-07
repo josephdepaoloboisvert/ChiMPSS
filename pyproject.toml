@@ -52,6 +52,8 @@ chimpss-generate-pca     = "chimpss.cli.generate_pca:main"
 chimpss-project-pca      = "chimpss.cli.project_pca:main"
 chimpss-recovery         = "chimpss.cli.recovery:main"
 chimpss-algdock          = "chimpss.cli.algdock:main"
+chimpss-motifs           = "chimpss.cli.motifs:main"
+chimpss-run-stats        = "chimpss.cli.run_stats:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

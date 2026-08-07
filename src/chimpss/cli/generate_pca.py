@@ -63,6 +63,11 @@ def parse_args():
                         '(default: 100.0)')
     p.add_argument('--workers', type=int, default=16,
                    help='Parallel HTTP fetch workers (default: 16)')
+    p.add_argument('--reference', default=None,
+                   help='PDB code every structure is superposed onto before PCA '
+                        '(e.g. 2RH1). Default: the first surviving structure, which '
+                        'depends on dict iteration order and is therefore not '
+                        'reproducible across runs.')
     return p.parse_args()
 
 
@@ -156,8 +161,21 @@ def main():
     if not selected:
         sys.exit("ERROR: no structures survived the atom-count filter.")
 
+    if args.reference:
+        want = args.reference.strip().upper()
+        match = [i for i, (code, _) in enumerate(selected) if code.upper() == want]
+        if not match:
+            sys.exit(
+                f"ERROR: --reference {want} is not among the {len(selected)} structures "
+                f"that survived fetching, BW mapping and the atom-count filter. "
+                f"Either it was never in the input list, or it was dropped earlier "
+                f"(check the counts printed above).")
+        # Move the requested reference to index 0 so it anchors the superposition.
+        selected.insert(0, selected.pop(match[0]))
+
     ref_code, ref_ag = selected[0]
-    print(f"Aligning {len(selected)} structures to reference {ref_code}...")
+    print(f"Aligning {len(selected)} structures to reference {ref_code}"
+          f"{' (requested)' if args.reference else ' (first by iteration order)'}...")
     for _, ag in selected:
         align.alignto(ag, ref_ag, select='all', weights='mass')
 
@@ -174,6 +192,11 @@ def main():
         print(f"  Dropping {n_dropped} outliers (|PC1| > {args.outlier_cutoff}): {dropped}")
     else:
         print("  No outliers found")
+
+    if not not_outlier[0]:
+        print(f"  WARNING: the superposition reference {ref_code} was itself dropped as an "
+              f"outlier. The shared coordinate frame is still well defined (every structure "
+              f"was aligned to it), but it does not contribute to the components.")
 
     selected_clean = [s for s, keep in zip(selected, not_outlier) if keep]
     vectorized_clean = vectorized[not_outlier]
