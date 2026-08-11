@@ -4,11 +4,22 @@
 
 # Configure JAX platform to match OpenMM platform BEFORE importing pymbar
 # This must come before any imports that trigger jax/pymbar loading
-from chimpss.algdock.parallel_config import configure_jax_platform
-# PyMBAR stays on CPU; OpenMM uses CUDA/OpenCL (set below via JAX_PLATFORMS)
-configure_jax_platform('CPU')
-
 import os
+
+from chimpss.algdock.parallel_config import configure_jax_platform
+
+# PyMBAR stays on CPU; OpenMM uses CUDA/OpenCL.
+#
+# Only when the caller has expressed no preference. chimpss/__init__.py imports
+# this module eagerly, so an unconditional call pinned JAX to CPU for EVERY
+# chimpss process -- including FultonMarket's JAX distance matrices, where no
+# OpenMM context is competing for the device. Measured on a V100, a 1000-frame
+# matrix takes 1.1 s on CPU against 0.001 s on GPU.
+#
+# AlGDock's default is unchanged; callers that export JAX_PLATFORMS are now
+# respected.
+if 'JAX_PLATFORMS' not in os.environ:
+    configure_jax_platform('CPU')
 import pickle
 import gzip
 import copy
@@ -60,9 +71,15 @@ except ImportError:
   Scientific = None
   Vector = None
 
-# Keep PyMBAR/JAX on CPU — GPU is reserved for OpenMM MD steps
+# Keep PyMBAR/JAX on CPU — GPU is reserved for OpenMM MD steps.
+#
+# setdefault, not assignment: chimpss/__init__.py imports this module eagerly,
+# so a plain assignment silently pinned JAX to CPU for EVERY chimpss process,
+# including FultonMarket's JAX-accelerated distance matrices where no OpenMM
+# context is competing for the device. Callers that want GPU JAX now export
+# JAX_PLATFORMS themselves and are respected; the default is unchanged.
 import os
-os.environ['JAX_PLATFORMS'] = 'cpu'
+os.environ.setdefault('JAX_PLATFORMS', 'cpu')
 
 import pymbar.timeseries
 
