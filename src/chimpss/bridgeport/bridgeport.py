@@ -507,6 +507,38 @@ class Bridgeport():
 
 
 
+    def _ligand_formal_charge(self) -> int:
+        """Formal charge of the ligand that will be joined after solvation.
+
+        Read from the SMILES in the config -- the analogue's if this is an
+        analogue build, otherwise the deposited ligand's -- because that string
+        is what fixes the ionization state (there is no pKa step anywhere in the
+        pipeline; small molecules just get AllChem.AddHs).  Returns 0 for apo
+        builds or if the charge cannot be determined, which reproduces the old
+        behaviour rather than guessing.
+        """
+        if getattr(self, 'type', None) == 'apo' or 'Ligand' not in self.input_params:
+            return 0
+        lig = self.input_params['Ligand']
+        smiles = None
+        if isinstance(lig.get('Analogue'), dict) and lig['Analogue'].get('smiles'):
+            smiles = lig['Analogue']['smiles']
+        elif lig.get('smiles'):
+            smiles = lig['smiles']
+        if not smiles:
+            return 0
+        try:
+            from rdkit import Chem
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                return 0
+            q = Chem.GetFormalCharge(mol)
+        except Exception:
+            return 0
+        print(datetime.now().strftime("%m/%d/%Y %H:%M:%S")
+              + f'//Ligand formal charge for neutralization: {q:+d}', flush=True)
+        return int(q)
+
     def add_environment(self, pH: float=7.0, membrane: bool=False, ion_strength: float=0.15):
         """
         Add water, lipids, and hydrogens to protein with the ProteinPreparer class.
@@ -520,6 +552,13 @@ class Bridgeport():
             if "ion_strength" in self.input_params["Environment"].keys():
                 ion_strength = self.input_params["Environment"]["ion_strength"]
 
+        # The ligand is joined AFTER solvation, so PDBFixer cannot see its charge
+        # and cannot neutralize it.  Take that charge from the SMILES actually
+        # being built and hand it to ProteinPreparer, which folds it into the
+        # counterion count.  Without this the finished system carries the
+        # ligand's charge no matter how well the protein was neutralized.
+        extra_charge = self._ligand_formal_charge()
+
         # Add the environment with ProteinPreparer
         if membrane:
             pp = ProteinPreparer(pdb_path=self.prot_pdb,
@@ -527,14 +566,16 @@ class Bridgeport():
                                  pH=pH,
                                  env='MEM',
                                  ion_strength=ion_strength,
-                                 verbose=self.verbose)
+                                 verbose=self.verbose,
+                                 extra_charge=extra_charge)
         else:
             pp = ProteinPreparer(pdb_path=self.prot_pdb,
                                  working_dir=self.prot_only_dir,
                                  pH=pH,
                                  env='SOL',
                                  ion_strength=ion_strength,
-                                 verbose=self.verbose)
+                                 verbose=self.verbose,
+                                 extra_charge=extra_charge)
         pp.main()
 
         # Remove unecessary .pqr and .log files

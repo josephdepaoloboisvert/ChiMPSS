@@ -58,7 +58,7 @@ class ProteinPreparer():
             Generates a solvated and possibly membrane-added system based on the specified mode. It uses PDBFixer to create an environment around the protein, either with just solvent or with both membrane and solvent, according to the user's choice.
     """
 
-    def __init__(self, pdb_path, working_dir: str, pH=7, env='MEM', ion_strength=0.15, verbose: bool=False):
+    def __init__(self, pdb_path, working_dir: str, pH=7, env='MEM', ion_strength=0.15, verbose: bool=False, extra_charge: int=0):
         """
         Parameters:
             pdb_path: string path to protein structure file
@@ -66,6 +66,11 @@ class ProteinPreparer():
             env: default 'MEM': 'MEM' for explicit membrane and solvent
                                 'SOL' for explicit solvent only
                                 no other modes supported
+            extra_charge: formal charge of any solute that is NOT present during
+                          solvation but will be joined afterwards -- in practice
+                          the ligand. PDBFixer neutralizes only what it can see,
+                          so without this the finished system carries the
+                          ligand's charge.
         """
         self.receptor_path = pdb_path
         self.prot_name = self.receptor_path.split('.')[0]
@@ -78,6 +83,7 @@ class ProteinPreparer():
         self.env = env
         self.ion = ion_strength
         self.verbose = verbose
+        self.extra_charge = int(extra_charge)
         print(datetime.now().strftime("%m/%d/%Y %H:%M:%S") + '//Welcome to ProteinPreparer', flush=True)
 
     def main(self):
@@ -240,17 +246,100 @@ class ProteinPreparer():
         (topology, atom_indices) = copyTopology(self.fixer.topology, \
                                                 residx_to_exclude = residx_out_of_box)
 
-        # Remove excess Na or Cl
+        # Rebalance Na/Cl WITHOUT destroying neutrality.
+        #
+        # PDBFixer.addMembrane() already neutralized the system: it adds salt in
+        # PAIRS to reach the requested ionic strength and then an EXCESS of one
+        # counterion species to cancel the solute's net charge.  That imbalance
+        # is the neutralization -- it is not stray salt to be tidied away.
+        #
+        # This block previously forced len(Na) == len(Cl), which discarded every
+        # counterion and left each finished system sitting at the protein's net
+        # charge (+7 to +14 across the five ChiMPSS systems).  Under PME that is
+        # absorbed by a uniform neutralizing background rather than raising, so
+        # it never surfaced as an error.
+        #
+        # Instead: measure the imbalance addMembrane created, offset it by the
+        # charge of any solute still to be joined (the ligand), and preserve that
+        # difference through the trim, removing only the minimum number of ions
+        # needed -- which also keeps the ionic strength as close as possible to
+        # the requested value.
         top = md.Topology.from_openmm(topology)
         positions = np.array(self.fixer.positions.value_in_unit(unit.angstroms))[atom_indices]
         if self.verbose:
             print('topology n_atoms', top.n_atoms, 'pos n_atoms', positions.shape[0])
-        Na_atoms = top.select('name Na')
-        Cl_atoms = top.select('name Cl')
-        min_count = min(len(Na_atoms), len(Cl_atoms))
-        remove_Na = Na_atoms[min_count:]
-        remove_Cl = Cl_atoms[min_count:]
-        remove_atoms = np.concatenate((remove_Na, remove_Cl))
+
+        na_all = sum(1 for a in self.fixer.topology.atoms() if a.name.strip() == 'Na')
+        cl_all = sum(1 for a in self.fixer.topology.atoms() if a.name.strip() == 'Cl')
+        target_diff = (na_all - cl_all) - self.extra_charge
+
+        na_idx = [int(i) for i in top.select('name Na')]
+        cl_idx = [int(i) for i in top.select('name Cl')]
+        excess = (len(na_idx) - len(cl_idx)) - target_diff
+
+        # Correct the imbalance by CONVERTING ions, not deleting them: relabelling
+        # one Na+ as Cl- moves the difference by 2 while leaving the total ion
+        # count -- and therefore the ionic strength -- untouched.  Deleting
+        # instead would drain the salt (it put 5HT2AR at 121 mM against a 150 mM
+        # target).  Nothing is parameterized yet at this point, so a relabel here
+        # is free.  Parity permits only even steps, so an odd excess needs one
+        # single ion removed as well.
+        convert, remove_atoms = [], []
+        if excess > 0:                      # too many Na+ -> turn some into Cl-
+            k = excess // 2
+            convert = [('Cl', i) for i in na_idx[len(na_idx) - k:]] if k else []
+            na_idx = na_idx[:len(na_idx) - k]
+            cl_idx = cl_idx + [i for _, i in convert]
+            if excess % 2:
+                remove_atoms.append(na_idx.pop())
+        elif excess < 0:                    # too many Cl- -> turn some into Na+
+            k = (-excess) // 2
+            convert = [('Na', i) for i in cl_idx[len(cl_idx) - k:]] if k else []
+            cl_idx = cl_idx[:len(cl_idx) - k]
+            na_idx = na_idx + [i for _, i in convert]
+            if excess % 2:
+                remove_atoms.append(cl_idx.pop())
+
+        # Second pass: the trim removed waters and ions by geometry, so the ion
+        # count may no longer match the requested ionic strength.  Drop whole
+        # NaCl PAIRS -- which leaves the neutralizing difference untouched -- to
+        # get as close as possible.  Following the convention addMembrane itself
+        # uses, concentration is per water (n_ion = 2*c*n_water/55.4), not per box
+        # volume, since the box is mostly lipid and protein that hold no ions.
+        # This can only remove: if the trim already left too few ions, the count
+        # simply stays below target.
+        n_wat = sum(1 for r in top.residues if r.name.strip() in ('HOH', 'WAT'))
+        if n_wat > 0:
+            desired = 2.0 * self.ion * n_wat / 55.4
+            total = len(na_idx) + len(cl_idx)
+            n_pairs = 0
+            while (total - 2 * (n_pairs + 1) >= abs(target_diff)
+                   and abs(total - 2 * (n_pairs + 1) - desired) < abs(total - 2 * n_pairs - desired)):
+                n_pairs += 1
+            if n_pairs:
+                remove_atoms += na_idx[len(na_idx) - n_pairs:]
+                remove_atoms += cl_idx[len(cl_idx) - n_pairs:]
+                na_idx = na_idx[:len(na_idx) - n_pairs]
+                cl_idx = cl_idx[:len(cl_idx) - n_pairs]
+
+        # Apply the relabels (skip any ion that is about to be deleted).
+        dropped = set(remove_atoms)
+        for species, i in convert:
+            if i in dropped:
+                continue
+            atom = top.atom(i)
+            atom.name = species
+            atom.element = md.element.chlorine if species == 'Cl' else md.element.sodium
+            atom.residue.name = species.upper()
+
+        if self.verbose:
+            ionic = 55.4 * (len(na_idx) + len(cl_idx)) / (2 * n_wat) if n_wat else 0.0
+            print(f'ion balance: addMembrane gave Na-Cl={na_all - cl_all}, '
+                  f'ligand charge={self.extra_charge}, target Na-Cl={target_diff}; '
+                  f'converted {len(convert)}, removed {len(remove_atoms)} '
+                  f'-> Na={len(na_idx)} Cl={len(cl_idx)}, net ion charge '
+                  f'{len(na_idx) - len(cl_idx):+d}, ionic strength {ionic:.4f} M')
+        remove_atoms = np.array(sorted(remove_atoms), dtype=int)
         if self.verbose:
             print('remove_atoms', remove_atoms)
         for i, atom in enumerate(sorted(remove_atoms)):
