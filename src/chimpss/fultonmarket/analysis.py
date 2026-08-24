@@ -551,19 +551,33 @@ class FultonMarketAnalysis():
 
         for i, storage_dir in enumerate(self.storage_dirs[:-2]):
             top_fn = os.path.join(storage_dir, 'topology.pdb')
-            if os.path.exists(top_fn):
-                continue
-
-            init_shape = self.positions[i].shape
-            sim_pos = np.array(self.positions[i][:, :, keep_inds, :])
-            self._printf(f'Truncated {storage_dir}: {init_shape} → {sim_pos.shape}', level='all')
-
             pos_fn = os.path.join(storage_dir, 'positions.npy')
-            os.remove(pos_fn)
-            mmap = np.memmap(pos_fn, mode='w+', dtype='float32', shape=sim_pos.shape)
-            mmap[:] = sim_pos.copy()
-            mmap.flush()
-            traj[0].save_pdb(top_fn)
+
+            # Decide from the DATA, not from a sentinel file. topology.pdb used to
+            # be the only guard and it is written LAST, so a crash between the
+            # rewrite and the save_pdb left an already-truncated array with no
+            # sentinel -- and the next pass sliced keep_inds into it a second
+            # time. Double truncation yields the wrong atoms silently instead of
+            # raising, which is unrecoverable once the full array is gone.
+            if self.positions[i].shape[2] != len(keep_inds):
+                init_shape = self.positions[i].shape
+                sim_pos = np.array(self.positions[i][:, :, keep_inds, :])
+                self._printf(f'Truncated {storage_dir}: {init_shape} → {sim_pos.shape}', level='all')
+
+                # Never delete the only copy before the replacement exists. Write a
+                # sibling temp file, flush, then rename: os.replace is atomic within
+                # a filesystem, so an interrupted truncation leaves the original
+                # production positions intact. The previous order (os.remove then
+                # recreate) destroyed multi-GB block data if the write failed.
+                tmp_fn = pos_fn + '.tmp'
+                mmap = np.memmap(tmp_fn, mode='w+', dtype='float32', shape=sim_pos.shape)
+                mmap[:] = sim_pos
+                mmap.flush()
+                del mmap
+                os.replace(tmp_fn, pos_fn)
+
+            if not os.path.exists(top_fn):
+                traj[0].save_pdb(top_fn)
 
         self._load_positions_box_vecs()
 

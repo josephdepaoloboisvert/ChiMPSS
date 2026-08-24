@@ -14,6 +14,18 @@ from chimpss.fultonmarket.utils import *
 from chimpss.shared.io import build_output_path, file_exists_skip, validate_name
 
 
+# Arrays written by Randolph.save_simulation for every completed block, in write
+# order. A block directory missing any of these is not resumable.
+REQUIRED_BLOCK_ARRAYS = (
+    'positions.npy',
+    'velocities.npy',
+    'box_vectors.npy',
+    'states.npy',
+    'energies.npy',
+    'temperatures.npy',
+)
+
+
 class FultonMarket():
     """
     Unrestrained Parallel Tempering Replica Exchange.
@@ -191,16 +203,29 @@ class FultonMarket():
         self.output_dir = output_dir
         self.name = output_dir.split('/')[-1]
         if self.protein_name and self.ligand_name:
-            self.output_ncdf     = build_output_path(output_dir, self.protein_name, self.ligand_name, 'trajectory', 'ncdf')
-            self.checkpoint_ncdf = build_output_path(output_dir, self.protein_name, self.ligand_name, 'checkpoint', 'ncdf')
+            self.output_ncdf = build_output_path(output_dir, self.protein_name, self.ligand_name, 'trajectory', 'ncdf')
         else:
-            self.output_ncdf     = os.path.join(output_dir, 'output.ncdf')
-            self.checkpoint_ncdf = os.path.join(output_dir, 'output_checkpoint.ncdf')
+            self.output_ncdf = os.path.join(output_dir, 'output.ncdf')
+        # Derive the checkpoint path exactly as MultiStateReporter does when it is
+        # constructed with checkpoint_storage=None (multistatereporter.py:138-141):
+        # splitext the storage name and splice in '_checkpoint'. Do not spell this
+        # name independently. Randolph.save_simulation opens it by path at the end
+        # of every block, so a divergence between the two spellings is invisible
+        # until a full block of sampling has already been paid for.
+        _stem, _ext = os.path.splitext(self.output_ncdf)
+        self.checkpoint_ncdf = _stem + '_checkpoint' + _ext
         self.save_dir = os.path.join(output_dir, 'saved_variables')
         os.makedirs(self.save_dir, exist_ok=True)
 
-        if file_exists_skip(self.output_ncdf, 'FultonMarket trajectory'):
-            print('Trajectory already exists. Move or delete it to re-run.')
+        # The trajectory NetCDF is scratch, not a completion marker: Randolph
+        # deletes it on every ladder rebuild (_remove_ncdf) and MultiStateReporter
+        # reopens it with mode='w'. Durable state lives in saved_variables/.
+        # Gating the whole run on this file made every wall-clock resubmit a
+        # silent no-op that still exited 0 -- indistinguishable from success.
+        # Only bail out when there is genuinely nothing to resume from.
+        if not os.listdir(self.save_dir) and file_exists_skip(self.output_ncdf, 'FultonMarket trajectory'):
+            print('Trajectory exists but saved_variables/ is empty, so there is no '
+                  'block to resume from. Move or delete the trajectory to re-run.')
             return
 
         printf(f'total_sim_time      : {self.total_sim_time} ns')
@@ -390,7 +415,13 @@ class FultonMarket():
             velocities_path = os.path.join(load_dir, 'velocities.npy')
             init_velocities = np.load(velocities_path) if os.path.exists(velocities_path) else None
             state_inds = np.load(os.path.join(load_dir, 'states.npy'))[-1]
-        except Exception:
+        except Exception as exc:
+            # This fallback re-reads the last frame out of the NetCDF instead of
+            # the saved arrays. It used to fire silently, so a run could resume
+            # from the fallback path for every block and look completely normal.
+            printf(f'WARNING: could not load saved arrays from {load_dir} '
+                   f'({type(exc).__name__}: {exc}); falling back to _recover_arguments() '
+                   f'against {self.output_ncdf}.')
             init_velocities, init_positions, init_box_vectors, state_inds = self._recover_arguments()
 
         # Reorder arrays from replica index to state index
@@ -438,11 +469,28 @@ class FultonMarket():
             Initialised to False when resuming; updated by
             `_evaluate_stopping_criterion`.
         """
-        incomplete = [d for d in os.listdir(self.save_dir) if len(os.listdir(os.path.join(self.save_dir, d))) < 5]
+        # Validate saved blocks by NAME, not by file count. save_simulation writes
+        # six arrays in a fixed order and is not atomic, so a crash partway through
+        # can leave five files behind -- which the old `len(...) < 5` test accepted
+        # as complete. The block would then resume with a missing or half-written
+        # array and fail much later, or worse, quietly use garbage.
+        block_dirs = sorted(d for d in os.listdir(self.save_dir)
+                            if os.path.isdir(os.path.join(self.save_dir, d)))
+        incomplete = {}
+        for d in block_dirs:
+            missing = [f for f in REQUIRED_BLOCK_ARRAYS
+                       if not os.path.exists(os.path.join(self.save_dir, d, f))]
+            if missing:
+                incomplete[d] = missing
         if incomplete:
-            raise RuntimeError(f'Incomplete save directories detected: {incomplete}. Remove or fix them before continuing.')
+            raise RuntimeError(
+                f'Incomplete save directories detected: {incomplete}. '
+                f'Each block must contain all of {list(REQUIRED_BLOCK_ARRAYS)}. '
+                f'Remove or fix them before continuing.')
 
-        self.sim_no = len(os.listdir(self.save_dir))
+        # Count directories only. A stray file in saved_variables/ used to inflate
+        # sim_no and silently skip a block of production.
+        self.sim_no = len(block_dirs)
         printf(f'Resuming from sim_no: {self.sim_no}')
         if self.total_sim_time is not None:
             self.total_n_sims = int(np.ceil(self.total_sim_time / self.sim_length))

@@ -136,9 +136,15 @@ def truncate_ncdf(ncdf_in, ncdf_out, out_dir, reporter, is_checkpoint: bool=Fals
                 dest[group_name].createVariable(name, variable.datatype, variable.dimensions)
                 dest[group_name][name][:] = src[group_name][name][:]
                 dest[group_name][name].setncatts(src[group_name][name].__dict__)
-            except Exception:
-                print(group_name, name)
-                pass
+            except Exception as exc:
+                # Was a bare two-word print, visually identical to ordinary
+                # progress output. In practice online_analysis/{f_k, free_energy,
+                # f_k_history, free_energy_history} fail here on every block save
+                # and are dropped from the truncated copy; say so explicitly
+                # rather than emitting two words with no context.
+                print(f'WARNING: truncate_ncdf could not copy group variable '
+                      f'{group_name}/{name} -- dropping it from {ncdf_out}: '
+                      f'{type(exc).__name__}: {exc}')
 
     for var_name, var in src.variables.items():
         var_out = dest.createVariable(var_name, var.datatype, var.dimensions)
