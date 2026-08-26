@@ -281,12 +281,47 @@ class ContactNetworkBuilder:
     # GetContacts execution
     # ------------------------------------------------------------------
 
+    def _cached_tsv_is_complete(self) -> bool:
+        """
+        Decide whether a cached TSV may be reused. Non-emptiness is NOT
+        sufficient: a TSV truncated by a wall-clock kill, an out-of-memory kill,
+        or concurrent writers is non-empty and parses cleanly, but yields a
+        contact matrix with as few as one row. The file is usable only if it
+        covers every frame GetContacts would have been asked to emit.
+        """
+        if os.path.getsize(self.out_tsv) == 0:
+            return False
+        if not (self.dcd_fn and os.path.exists(self.dcd_fn)):
+            return True                      # TSV-only mode: nothing to check against
+        try:
+            with md.open(self.dcd_fn) as fh:
+                expected = math.ceil(len(fh) / self.stride)
+        except Exception as exc:             # unreadable trajectory: let the caller fail loudly
+            printf(f'Could not read frame count from {self.dcd_fn} '
+                   f'({type(exc).__name__}: {exc}); accepting cached TSV unchecked.')
+            return True
+
+        seen = set()
+        with open(self.out_tsv) as fh:
+            for line in fh:
+                if line.startswith('#'):
+                    continue
+                head = line.split('\t', 1)[0].strip()
+                if head.isdigit():
+                    seen.add(int(head))
+        if len(seen) < expected:
+            printf(f'Cached contacts TSV {self.out_tsv} covers {len(seen)} of {expected} '
+                   f'frames -- discarding it and recomputing.')
+            return False
+        return True
+
+
     def _run_getcontacts(self):
         """
-        Run GetContacts, skipping if a valid cached TSV already exists or if
-        ``getcontacts_script`` is None (i.e. TSV-only mode via ``from_tsv``).
+        Run GetContacts, skipping only if a COMPLETE cached TSV already exists,
+        or if ``getcontacts_script`` is None (i.e. TSV-only mode via ``from_tsv``).
         """
-        if os.path.exists(self.out_tsv) and os.path.getsize(self.out_tsv) > 0:
+        if os.path.exists(self.out_tsv) and self._cached_tsv_is_complete():
             printf(f'Using existing contacts TSV: {self.out_tsv}')
             return
 
@@ -296,9 +331,22 @@ class ContactNetworkBuilder:
                 'Pass a valid tsv_fn to from_tsv, or provide getcontacts_script and dcd_fn.'
             )
 
-        cmd = self._build_cmd()
-        printf(f'Running GetContacts: {" ".join(cmd)}')
-        subprocess.run(cmd, check=True, cwd=os.path.dirname(self.getcontacts_script))
+        # Emit to a sibling temp path and rename only on success. GetContacts
+        # takes minutes per hundred frames, so anything that interrupts it used
+        # to leave a short-but-non-empty TSV sitting at the real path, which the
+        # old size>0 cache test then adopted on every subsequent attempt.
+        # os.replace is atomic, so an interrupted run leaves no reusable file.
+        final, tmp = self.out_tsv, self.out_tsv + '.tmp'
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        self.out_tsv = tmp
+        try:
+            cmd = self._build_cmd()
+            printf(f'Running GetContacts: {" ".join(cmd)}')
+            subprocess.run(cmd, check=True, cwd=os.path.dirname(self.getcontacts_script))
+            os.replace(tmp, final)
+        finally:
+            self.out_tsv = final
 
 
     def _build_cmd(self) -> List[str]:

@@ -1,6 +1,7 @@
 # Package Imports
 import os
 
+import mpiplus
 import netCDF4 as nc
 import numpy as np
 import openmm.unit as unit
@@ -527,6 +528,17 @@ class FultonMarket():
         return velocities, positions, box_vectors, state_inds
 
 
+    # Runs on rank 0 only, exactly as Randolph.save_simulation does. Without this
+    # every rank executed the whole convergence analysis against the SAME output
+    # paths -- four concurrent get_dynamic_contacts.py processes writing one
+    # resampled_contacts.tsv, plus four writers each of resampled_trj.dcd,
+    # resampled_top.pdb, resampled_wghts.npy, resampled_indcs.npy and the three
+    # distance matrices. The race is nondeterministic: block 1 of run 53753497
+    # happened to win it (1000 frames, 112 MB) and block 2 lost, leaving a
+    # 1-frame TSV that collapsed the contact matrix to (1, 1) and killed the job
+    # on a shape mismatch after eight hours of sampling. broadcast_result puts
+    # the same verdict on every rank so they agree on whether to stop.
+    @mpiplus.on_single_node(rank=0, broadcast_result=True, sync_nodes=True)
     def _evaluate_stopping_criterion(self, n_resample=1000, max_equil_fraction=0.75, frobenius_thresh=0.05, jsd_thresh=0.10, getContacts_Info=None, skip_contacts=False):
         """
         Check whether the simulation should stop by evaluating a series of
