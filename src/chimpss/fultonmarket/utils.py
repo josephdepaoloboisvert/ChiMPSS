@@ -296,6 +296,47 @@ def calculate_weighted_rc(reduced_cartesian, resampled_inds, upper_limit, pca_we
     return np.mean(mean_weighted_rcs), np.std(mean_weighted_rcs) / np.sqrt(reduced_cartesian.shape[0])
 
 
+class MBARWeightsDegenerate(RuntimeError):
+    """
+    Raised when an MBAR weight column carries no usable probability mass.
+
+    Signals that the MBAR solve did not converge on this data -- not that the
+    trajectory is bad. Callers that only need the weights for a convergence
+    check should catch this, skip the check, and keep sampling.
+    """
+
+
+def _sanitize_probabilities(raw: np.array):
+    """
+    Turn a raw MBAR weight column into a valid probability vector for
+    np.random.choice, or return None if it carries no usable signal.
+
+    Order of operations matters here. The previous implementation did
+
+        probs /= np.nan_to_num(probs).sum()
+        probs = np.nan_to_num(probs)
+
+    which divides an array that STILL contains NaN, and only replaces NaN with
+    zero afterwards. When MBAR fails to converge and returns an all-NaN or
+    all-zero column the denominator is 0, the division yields inf/NaN, and the
+    vector sums to 0 -- surfacing as the opaque numpy error "probabilities do
+    not sum to 1". Sanitize first, validate, then normalize.
+    """
+    probs = np.array(raw, dtype=np.float64, copy=True)   # never alias the caller's weights
+    probs = np.nan_to_num(probs, nan=0.0, posinf=0.0, neginf=0.0)
+    np.clip(probs, 0.0, None, out=probs)                 # MBAR weights are non-negative by definition
+    total = probs.sum()
+    if not np.isfinite(total) or total <= 0.0:
+        return None
+    probs /= total
+    # np.random.choice compares |sum - 1| against sqrt(eps); renormalizing a long
+    # float64 vector can still leave it a few ulp out. Absorb the drift.
+    drift = 1.0 - probs.sum()
+    if drift != 0.0:
+        probs[probs.argmax()] += drift
+    return probs
+
+
 def resample_with_MBAR(objs: List, u_kln: np.array, N_k: np.array, size: int, reshape_weights: tuple=None, specify_state: int=0, return_inds: bool=False, return_weights: bool=False, return_resampled_weights: bool=False, replace: bool=True, _printf=None):
 
     # Get MBAR weights
@@ -318,12 +359,20 @@ def resample_with_MBAR(objs: List, u_kln: np.array, N_k: np.array, size: int, re
         resampled_inds = np.where(probs >= probs.max()*0.001)[0]
         _log(f'Top 99.9% of probability includes {len(resampled_inds)} no. of frames')
     else:
-        probs /= np.nan_to_num(probs).sum() # Renormalize to avoid errors
-        probs = np.nan_to_num(probs)
-        try:
-            resampled_inds = np.random.choice(range(len(probs)), size=size, replace=replace, p=probs)
-        except Exception:
-            resampled_inds = np.random.choice(range(len(probs)), size=len(np.where(probs > 0)[0]), replace=replace, p=probs)
+        probs = _sanitize_probabilities(probs)
+        if probs is None:
+            # The old code fell back to np.random.choice with the SAME bad p and
+            # merely a different size, so it raised identically and killed the
+            # job. Fail with something diagnosable instead.
+            raise MBARWeightsDegenerate(
+                f'MBAR returned no usable weights at state {specify_state}: every '
+                'entry was NaN, non-finite, or non-positive after sanitization. '
+                'The MBAR solve did not converge on this data.'
+            )
+        ess = 1.0 / np.sum(probs ** 2)
+        _log(f'MBAR weights at state {specify_state}: effective sample size '
+             f'{ess:.1f} of {len(probs)} ({100 * ess / len(probs):.2f}%)')
+        resampled_inds = np.random.choice(len(probs), size=size, replace=replace, p=probs)
 
     resampled_objs = []
     for obj in objs:

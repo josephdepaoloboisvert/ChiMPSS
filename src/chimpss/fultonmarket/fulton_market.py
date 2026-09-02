@@ -12,6 +12,7 @@ from openmmtools.states import SamplerState, ThermodynamicState
 from chimpss.fultonmarket.analysis import FultonMarketAnalysis
 from chimpss.fultonmarket.randolph import Randolph
 from chimpss.fultonmarket.utils import *
+from chimpss.fultonmarket.utils import MBARWeightsDegenerate
 from chimpss.shared.io import build_output_path, file_exists_skip, validate_name
 
 
@@ -597,7 +598,20 @@ class FultonMarket():
 
         # Importance resampling and trajectory
         sim_dir = os.path.join(self.output_dir, 'saved_variables', str(self.sim_no))
-        _ = analyzer.importance_resampling(n_samples=n_resample)
+        try:
+            _ = analyzer.importance_resampling(n_samples=n_resample)
+        except MBARWeightsDegenerate as exc:
+            # A convergence check that cannot be computed is not a reason to
+            # destroy the sampling. Three runs (53855971, 53855972, 53856114)
+            # died here after 17 h to 1 d 22 h of production because the raw
+            # numpy ValueError propagated out through MPI_Abort. The block's six
+            # state arrays are already saved and resumable; report the block as
+            # not-converged and carry on, leaving the operator to decide whether
+            # a ladder this fine is worth reweighting at all.
+            printf(f"WARNING: convergence check skipped for block {self.sim_no}: {exc}")
+            printf("WARNING: sampling continues; this block contributes no "
+                   "convergence comparison and has no resampled_* artifacts.")
+            return False
         traj = analyzer.write_resampled_traj(
             pdb_out=os.path.join(sim_dir, 'resampled_top.pdb'),
             dcd_out=os.path.join(sim_dir, 'resampled_trj.dcd'),
