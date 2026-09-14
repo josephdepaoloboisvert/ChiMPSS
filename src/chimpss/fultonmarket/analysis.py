@@ -182,7 +182,15 @@ class FultonMarketAnalysis():
         if equilibration_method == 'PCA':
             self.get_PCA(state_no=0, stride=stride, explained_variance_threshold=0.9)
             equil_times = np.array([detect_PC_equil(pc, self.reduced_cartesian) for pc in range(self.n_components)])
-            self.t0 = int(np.sum(equil_times * (self.explained_variance / self.explained_variance.sum()))) * stride
+            # self.explained_variance is the CUMULATIVE curve (get_traj_PCA builds
+            # it that way for the variance threshold), so it must be differenced
+            # before it can weight components. Dividing the cumulative values by
+            # their sum inverts the intended weighting: on NTSR1 rep0 each
+            # near-zero-t0 trailing component received 3.1x the weight of PC1,
+            # and the forty zeros dragged the consensus to t0=50 of 729 frames
+            # (6.9%) against 320 (43.9%) with correct weights.
+            weights = per_component_variance(self.explained_variance)
+            self.t0 = int(np.sum(equil_times * weights)) * stride
 
         elif equilibration_method == 'energy':
             self.t0 = detect_energy_equil(self.get_average_energy())
@@ -527,6 +535,11 @@ class FultonMarketAnalysis():
             state_weights = np.ones(state_flat_inds.shape[0])
             self.mean_weighted_reduced_cartesian, self.mean_weighted_reduced_cartesian_err = (
                 calculate_weighted_rc(self.reduced_cartesian, state_flat_inds, rc_upper_limit,
+                                      # NOTE: this passes the CUMULATIVE explained-variance
+                                      # curve as per-component pca_weights, the same inversion
+                                      # that was fixed in determine_equilibration. Left as-is
+                                      # because it changes a different published quantity;
+                                      # wrap with per_component_variance() to correct it.
                                       self.explained_variance, state_weights)
             )
         else:

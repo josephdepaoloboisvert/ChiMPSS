@@ -55,6 +55,7 @@ chimpss-algdock          = "chimpss.cli.algdock:main"
 chimpss-motifs           = "chimpss.cli.motifs:main"
 chimpss-run-stats        = "chimpss.cli.run_stats:main"
 chimpss-convergence-report = "chimpss.cli.convergence_report:main"
+chimpss-pca-equil        = "chimpss.cli.pca_equilibration:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

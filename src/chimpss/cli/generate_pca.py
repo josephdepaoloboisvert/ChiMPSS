@@ -63,6 +63,13 @@ def parse_args():
                         '(default: 100.0)')
     p.add_argument('--workers', type=int, default=16,
                    help='Parallel HTTP fetch workers (default: 16)')
+    p.add_argument('--no_validate_numbering', action='store_true',
+                   help='Trust PDB author numbering as GPCRdb sequence numbering '
+                        'without checking it against the observed sequence. '
+                        'The legacy behaviour.')
+    p.add_argument('--numbering_identity', type=float, default=0.90,
+                   help='Sequence identity below which a structure is remapped '
+                        'by gap-aware alignment instead (default: 0.90).')
     p.add_argument('--reference', default=None,
                    help='PDB code every structure is superposed onto before PCA '
                         '(e.g. 2RH1). Default: the first surviving structure, which '
@@ -110,8 +117,22 @@ def main():
     print(f"  {len(tests)} structures loaded")
 
     print("Building Ballesteros-Weinstein assignments...")
-    bw_assignments = build_bw_assignments(tests)
+    numbering = {}
+    bw_assignments = build_bw_assignments(
+        tests, validate=not args.no_validate_numbering,
+        identity_threshold=args.numbering_identity,
+        diagnostics=numbering)
     print(f"  Assignments built for {len(bw_assignments)} structures")
+    if numbering:
+        modes = Counter(v['mode'] for v in numbering.values())
+        print(f"  Numbering: {modes.get('direct', 0)} direct, "
+              f"{modes.get('aligned', 0)} realigned")
+        poor = sorted(c for c, v in numbering.items() if v['identity'] < 0.90)
+        if poor:
+            print(f"  WARNING: {len(poor)} structure(s) still below 90% sequence "
+                  f"identity to their GPCRdb entry — likely chimeras:")
+            print(f"    {', '.join(poor[:12])}"
+                  + (f" ... (+{len(poor) - 12} more)" if len(poor) > 12 else ""))
 
     if args.bw_positions is not None:
         try:

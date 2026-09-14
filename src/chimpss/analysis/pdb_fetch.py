@@ -54,7 +54,12 @@ _EM_KEYWORDS   = {'electron', 'cryo-em', 'cryoem', 'em'}
 
 def classify_method(structure):
     """Return 'xray', 'em', or 'other' for a structure dict."""
-    raw = (structure.get('structure_type') or
+    # GPCRdb's structure endpoint names this field 'type'; the other two are
+    # kept for payloads from the older service paths.  Omitting 'type' made
+    # every structure classify as 'other', so --method silently dropped all of
+    # them.
+    raw = (structure.get('type') or
+           structure.get('structure_type') or
            structure.get('method') or '').lower()
     if any(k in raw for k in _XRAY_KEYWORDS):
         return 'xray'

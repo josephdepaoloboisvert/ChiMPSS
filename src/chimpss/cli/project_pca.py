@@ -25,6 +25,10 @@ import numpy as np
 
 from chimpss.analysis.gpcr_pca import (
     _imputation_setup,
+    align_sequence_to_gpcrdb,
+    build_gpcrdb_sequence,
+    build_traj_sequence,
+    map_conserved_resids_aligned,
     _verbose_loadings_report,
     _verbose_mapping_report,
     _verbose_training_comparison,
@@ -59,7 +63,14 @@ def parse_args():
     p.add_argument('--out', default=None,
                    help='Output .npy file (default: <pdb_code>_projections.npy)')
     p.add_argument('--no_auto_offset', action='store_true',
-                   help='Disable automatic resid-offset detection.')
+                   help='Disable automatic resid-offset detection '
+                        '(only meaningful with --sequence_map offset).')
+    p.add_argument('--sequence_map', choices=('align', 'offset'), default='align',
+                   help="How GPCRdb sequence numbers are mapped to trajectory "
+                        "resids. 'align' (default) runs a gap-aware global "
+                        "alignment and tolerates internal deletions; 'offset' "
+                        "is the legacy single-integer shift, which silently "
+                        "mis-assigns every residue downstream of an indel.")
     p.add_argument('--verbose', '-v', action='store_true',
                    help='Print detailed diagnostics.')
     return p.parse_args()
@@ -113,21 +124,46 @@ def main():
     if args.chain:
         print(f"Chain     : {args.chain}")
 
-    if args.no_auto_offset:
-        resid_offset = args.resid_offset
-        if resid_offset:
-            print(f"Resid offset: {resid_offset:+d}  (auto-detection disabled)")
-    else:
-        resid_offset = auto_detect_resid_offset(
-            u, analyzer, chain=args.chain, user_offset=args.resid_offset)
-        if resid_offset:
-            print(f"Resid offset: {resid_offset:+d}")
+    if args.sequence_map == 'align':
+        print("Mapping conserved BW positions by gap-aware sequence alignment...")
+        gpcrdb_seq = build_gpcrdb_sequence(analyzer.meta.get('naming', []))
+        traj_seq = build_traj_sequence(u, chain=args.chain)
+        seq_map, stats = align_sequence_to_gpcrdb(traj_seq, gpcrdb_seq)
 
-    print("Mapping conserved BW positions to trajectory residues...")
-    resids, missing_info = map_conserved_resids(
-        bw_map, conserved_bw, u,
-        chain=args.chain,
-        resid_offset=resid_offset)
+        print(f"  Aligned {stats['n_aligned']} / {stats['n_traj']} residues  "
+              f"({stats['identity']:.1%} identity)")
+        print(f"  Resid offsets: {stats['offsets']}")
+        if len(stats['offsets']) > 1:
+            print(f"  NOTE: {len(stats['offsets'])} distinct offsets — this "
+                  f"construct carries an internal deletion.")
+            print( "        A single-offset mapping (--sequence_map offset) "
+                   "would mis-assign")
+            print( "        every conserved position downstream of it.")
+        if stats['identity'] < 0.70:
+            print(f"  WARNING: only {stats['identity']:.1%} identity to "
+                  f"{args.pdb_code.upper()}'s GPCRdb sequence — check that the "
+                  f"topology really is this receptor.")
+
+        chain_sel = f"chainid {args.chain} and " if args.chain else ""
+        available = set(u.select_atoms(f"{chain_sel}backbone").residues.resids)
+        resids, missing_info = map_conserved_resids_aligned(
+            bw_map, conserved_bw, seq_map, available)
+    else:
+        if args.no_auto_offset:
+            resid_offset = args.resid_offset
+            if resid_offset:
+                print(f"Resid offset: {resid_offset:+d}  (auto-detection disabled)")
+        else:
+            resid_offset = auto_detect_resid_offset(
+                u, analyzer, chain=args.chain, user_offset=args.resid_offset)
+            if resid_offset:
+                print(f"Resid offset: {resid_offset:+d}")
+
+        print("Mapping conserved BW positions to trajectory residues...")
+        resids, missing_info = map_conserved_resids(
+            bw_map, conserved_bw, u,
+            chain=args.chain,
+            resid_offset=resid_offset)
 
     imputation = None
 
@@ -199,7 +235,7 @@ def main():
     else:
         print(f"  All {len(conserved_bw)} conserved positions mapped successfully")
 
-    if args.verbose:
+    if args.verbose and args.sequence_map == 'offset':
         _verbose_mapping_report(bw_map, conserved_bw, resids, u,
                                 args.chain, resid_offset)
 

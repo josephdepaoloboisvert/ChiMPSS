@@ -283,6 +283,28 @@ def get_traj_PCA(traj, explained_variance_threshold: float=None):
     return pca, reduced_cartesian[:,:n_components], explained_variance[:n_components], n_components
 
 
+def per_component_variance(cumulative_explained_variance):
+    """Convert the cumulative explained-variance curve into per-component weights.
+
+    :func:`get_traj_PCA` deliberately returns the *cumulative* curve, because
+    that is what the ``explained_variance_threshold`` cut needs.  Anything that
+    wants to weight components by how much variance each one carries must
+    difference it first -- using the cumulative values directly gives the
+    trailing components the largest weights, which is backwards.
+
+    Returns a normalised, non-negative weight per component.
+    """
+    ev = np.asarray(cumulative_explained_variance, dtype=np.float64).ravel()
+    if ev.size == 0:
+        return ev
+    per = np.diff(np.concatenate([[0.0], ev]))
+    per = np.clip(per, 0.0, None)          # guard float noise on a flat tail
+    total = per.sum()
+    if total <= 0:
+        return np.full(ev.size, 1.0 / ev.size)
+    return per / total
+
+
 def calculate_weighted_rc(reduced_cartesian, resampled_inds, upper_limit, pca_weights, mbar_weights):
     assert reduced_cartesian.shape[0] == len(resampled_inds), f'{reduced_cartesian.shape}, {resampled_inds.shape}'
     assert reduced_cartesian.shape[0] == len(mbar_weights)

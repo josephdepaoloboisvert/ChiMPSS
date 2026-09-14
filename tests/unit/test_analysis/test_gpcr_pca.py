@@ -185,3 +185,194 @@ def test_naming_from_convention_no_match_returns_minus1():
 def test_naming_from_convention_invalid_scheme():
     with pytest.raises(AssertionError):
         naming_from_convention([], scheme="INVALID")
+
+
+# ── gap-aware sequence mapping ────────────────────────────────────────────────
+
+from chimpss.analysis.gpcr_pca import (  # noqa: E402
+    _gotoh_align,
+    align_sequence_to_gpcrdb,
+    map_conserved_resids_aligned,
+)
+
+_SEQ = ("MHLNSSVPQGTPGEPDAQPFSGPQSEMEATFLALSLSNGSGNTSESDTAGPNSDLDVNTDIY"
+        "SKVLVTAVYLALFVVGTVGNSVTAFTLARKKSLQSLQSTVHYHLGSLALSDLLILLLAMPVE")
+
+
+def _seqdict(s, start=1):
+    return {i + start: aa for i, aa in enumerate(s)}
+
+
+def test_gotoh_align_identical_sequences():
+    pairs = _gotoh_align("ACDEFGHIK", "ACDEFGHIK")
+    assert pairs == [(i, i) for i in range(9)]
+
+
+def test_gotoh_align_recovers_internal_deletion():
+    ref = "ACDEFGHIKLMNPQRST"
+    qry = ref[:6] + ref[10:]          # four residues deleted internally
+    pairs = _gotoh_align(ref, qry)
+    assert len(pairs) == len(qry)
+    for i, j in pairs:
+        assert ref[i] == qry[j]
+
+
+def test_align_sequence_to_gpcrdb_perfect_single_offset():
+    gseq = _seqdict(_SEQ, start=1)
+    traj = [(i + 50, aa) for i, aa in enumerate(_SEQ)]
+    mapping, stats = align_sequence_to_gpcrdb(traj, gseq)
+    assert stats["n_aligned"] == len(_SEQ)
+    assert stats["identity"] == pytest.approx(1.0)
+    assert stats["offsets"] == {-49: len(_SEQ)}
+    assert mapping[1] == 50
+
+
+def test_align_sequence_to_gpcrdb_resolves_two_offsets_across_a_deletion():
+    """The regression this mapper exists for.
+
+    A crystallisation construct with an internal deletion, renumbered
+    contiguously, cannot be described by one integer offset.  The aligner must
+    recover both segments and map every residue that is actually present.
+    """
+    gseq = _seqdict(_SEQ, start=1)
+    kept = _SEQ[:60] + _SEQ[64:]               # drop GPCRdb residues 61-64
+    traj = [(i + 50, aa) for i, aa in enumerate(kept)]
+
+    mapping, stats = align_sequence_to_gpcrdb(traj, gseq)
+
+    assert stats["n_aligned"] == len(kept)
+    assert stats["identity"] == pytest.approx(1.0)
+    assert len(stats["offsets"]) == 2
+    assert set(stats["offsets"]) == {-49, -45}
+    assert mapping[1] == 50                    # before the deletion
+    assert mapping[65] == 110                  # after it, shifted by four
+
+
+def test_single_offset_search_fails_where_the_aligner_succeeds():
+    """Contrast with :func:`sliding_window_align`, which assumes one offset."""
+    gseq = _seqdict(_SEQ, start=1)
+    kept = _SEQ[:60] + _SEQ[64:]
+    traj = [(i + 50, aa) for i, aa in enumerate(kept)]
+
+    _, confidence, _, _ = sliding_window_align(traj, gseq)
+    _, stats = align_sequence_to_gpcrdb(traj, gseq)
+
+    assert confidence < 0.75                   # single offset cannot span the gap
+    assert stats["identity"] == pytest.approx(1.0)
+
+
+def test_align_sequence_to_gpcrdb_tolerates_point_mutations():
+    gseq = _seqdict(_SEQ, start=1)
+    mutated = list(_SEQ)
+    for i in (5, 20, 44, 71, 90):
+        mutated[i] = "A" if mutated[i] != "A" else "G"
+    traj = [(i + 1, aa) for i, aa in enumerate(mutated)]
+
+    mapping, stats = align_sequence_to_gpcrdb(traj, gseq)
+    assert stats["n_aligned"] == len(_SEQ)
+    assert 0.90 < stats["identity"] < 1.0
+    assert mapping[1] == 1
+
+
+def test_align_sequence_to_gpcrdb_n_terminal_truncation():
+    gseq = _seqdict(_SEQ, start=1)
+    traj = [(i + 1, aa) for i, aa in enumerate(_SEQ[30:])]
+    mapping, stats = align_sequence_to_gpcrdb(traj, gseq)
+    assert stats["identity"] == pytest.approx(1.0)
+    assert mapping[31] == 1
+
+
+def test_align_sequence_to_gpcrdb_empty_inputs():
+    mapping, stats = align_sequence_to_gpcrdb([], {})
+    assert mapping == {}
+    assert stats["n_aligned"] == 0
+    assert stats["identity"] == 0.0
+
+
+def test_map_conserved_resids_aligned_maps_present_positions():
+    bw_map = {10: "3.50", 20: "6.48", 30: "7.49"}
+    seq_map = {10: 110, 20: 120, 30: 130}
+    resids, missing = map_conserved_resids_aligned(
+        bw_map, ["3.50", "6.48", "7.49"], seq_map, available={110, 120, 130})
+    assert resids == [[110], [120], [130]]
+    assert missing == []
+
+
+def test_map_conserved_resids_aligned_flags_unmapped_and_unavailable():
+    bw_map = {10: "3.50", 20: "6.48"}
+    seq_map = {10: 110}                        # 20 never aligned
+    resids, missing = map_conserved_resids_aligned(
+        bw_map, ["3.50", "6.48", "1.50"], seq_map, available={110})
+    assert resids == [[110], [], []]
+    reasons = {lbl: reason for lbl, _, reason in missing}
+    assert "not aligned" in reasons["6.48"]
+    assert "not in GPCRdb BW map" in reasons["1.50"]
+
+
+def test_map_conserved_resids_aligned_flags_resid_without_backbone():
+    bw_map = {10: "3.50"}
+    seq_map = {10: 110}
+    resids, missing = map_conserved_resids_aligned(
+        bw_map, ["3.50"], seq_map, available=set())
+    assert resids == [[]]
+    assert "no backbone atoms" in missing[0][2]
+
+
+# ── numbering validation ──────────────────────────────────────────────────────
+
+from chimpss.analysis.gpcr_pca import validate_numbering  # noqa: E402
+
+
+def test_validate_numbering_trusts_correct_author_numbering():
+    """Deposited entries almost always number by UniProt; do not touch them."""
+    gseq = _seqdict(_SEQ, start=1)
+    observed = [(i + 1, aa) for i, aa in enumerate(_SEQ)]
+    mode, mapping, stats = validate_numbering(observed, gseq)
+    assert mode == "direct"
+    assert stats["direct_identity"] == pytest.approx(1.0)
+    assert mapping[1] == 1
+
+
+def test_validate_numbering_tolerates_disordered_gaps():
+    """Missing density must not trigger a realignment: the numbering is fine."""
+    gseq = _seqdict(_SEQ, start=1)
+    observed = [(i + 1, aa) for i, aa in enumerate(_SEQ)
+                if not (30 <= i < 45)]
+    mode, _, stats = validate_numbering(observed, gseq)
+    assert mode == "direct"
+    assert stats["direct_identity"] == pytest.approx(1.0)
+
+
+def test_validate_numbering_realigns_construct_numbering():
+    """Construct numbering that does not match UniProt must be remapped."""
+    gseq = _seqdict(_SEQ, start=1)
+    observed = [(i + 1, aa) for i, aa in enumerate(_SEQ[20:])]   # renumbered from 1
+    mode, mapping, stats = validate_numbering(observed, gseq)
+    assert mode == "aligned"
+    assert stats["aligned_identity"] > stats["direct_identity"]
+    assert mapping[21] == 1
+
+
+def test_validate_numbering_keeps_direct_when_alignment_is_worse():
+    """A noisy chimera must not be made worse by realigning it."""
+    gseq = _seqdict(_SEQ, start=1)
+    observed = [(i + 1, "W") for i in range(len(_SEQ))]          # nothing matches
+    mode, _, stats = validate_numbering(observed, gseq)
+    assert mode == "direct"
+    assert stats["identity"] == stats["direct_identity"]
+
+
+def test_validate_numbering_threshold_is_honoured():
+    gseq = _seqdict(_SEQ, start=1)
+    observed = [(i + 1, aa) for i, aa in enumerate(_SEQ)]
+    assert validate_numbering(observed, gseq, identity_threshold=1.01)[0] != "direct" \
+        or validate_numbering(observed, gseq, identity_threshold=0.5)[0] == "direct"
+
+
+def test_validate_numbering_handles_no_overlapping_resids():
+    gseq = _seqdict(_SEQ, start=1)
+    observed = [(i + 10000, aa) for i, aa in enumerate(_SEQ)]
+    mode, mapping, stats = validate_numbering(observed, gseq)
+    assert stats["n_checked"] == 0
+    assert mode == "aligned"
+    assert mapping[1] == 10000
