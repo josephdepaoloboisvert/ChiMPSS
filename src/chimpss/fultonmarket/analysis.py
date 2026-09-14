@@ -355,12 +355,16 @@ class FultonMarketAnalysis():
                          chain: str = None,
                          resid_offset: int = 0,
                          stor_dir: str = './many_structures/',
+                         sequence_map: str = 'align',
                          out: str = None) -> np.ndarray:
         """
         Project the resampled trajectory onto a pre-computed GPCR PCA space.
 
-        TODO (Phase 6): update this import once project_pca_gpcrs.py is migrated
-        to chimpss.analysis.gpcr_pca and the sys.path hack below can be removed.
+        ``sequence_map='align'`` (the default) maps GPCRdb sequence numbers to
+        trajectory resids by gap-aware alignment.  The legacy ``'offset'`` mode
+        applies a single integer shift, which silently mis-assigns every
+        residue downstream of an internal deletion -- on NTSR1 that is all of
+        TM6, TM7 and H8.
         """
         import json
         import tempfile
@@ -369,22 +373,16 @@ class FultonMarketAnalysis():
         import MDAnalysis as mda
         from MDAnalysis.coordinates.memory import MemoryReader
 
-        # Locate the repo root (src/chimpss/fultonmarket/analysis.py -> go up 4 levels)
-        _repo_root = os.path.dirname(
-            os.path.dirname(
-                os.path.dirname(
-                    os.path.dirname(os.path.abspath(__file__))
-                )
-            )
-        )
-        if _repo_root not in sys.path:
-            sys.path.insert(0, _repo_root)
-
-        from project_pca_gpcrs import (
+        from chimpss.analysis.gpcr_pca import (
             _imputation_setup,
+            align_sequence_to_gpcrdb,
+            build_gpcrdb_sequence,
             build_mobile_ag,
-            fetch_bw_map,
+            build_traj_sequence,
+            fetch_naming_info,
             map_conserved_resids,
+            map_conserved_resids_aligned,
+            naming_from_convention,
             project_trajectory,
         )
 
@@ -398,7 +396,7 @@ class FultonMarketAnalysis():
             if not os.path.exists(path):
                 raise FileNotFoundError(
                     f"'{path}' not found. "
-                    f"Run generate_pca_gpcrs.py --prefix {prefix} first.")
+                    f"Run chimpss-generate-pca --prefix {prefix} first.")
 
         pca = joblib.load(pca_path)
         with open(meta_path, 'r') as fh:
@@ -424,7 +422,7 @@ class FultonMarketAnalysis():
 
         os.makedirs(stor_dir, exist_ok=True)
         self._printf(f"Fetching GPCRdb BW map for {pdb_code.upper()}...", level='minimal')
-        _, bw_map = fetch_bw_map(pdb_code, stor_dir)
+        naming_info, bw_map = fetch_naming_info(pdb_code, stor_dir)
 
         if resampled_dcd is not None:
             top_path = resampled_pdb if resampled_pdb is not None else self.pdb
@@ -450,10 +448,23 @@ class FultonMarketAnalysis():
             self._printf(f"Resid offset: {resid_offset:+d}", level='minimal')
 
         self._printf("Mapping conserved BW positions to trajectory residues...", level='all')
-        resids, missing_info = map_conserved_resids(
-            bw_map, conserved_bw, u,
-            chain=chain,
-            resid_offset=resid_offset)
+        if sequence_map == 'align':
+            seq_map, seq_stats = align_sequence_to_gpcrdb(
+                build_traj_sequence(u, chain=chain),
+                build_gpcrdb_sequence(naming_info))
+            self._printf(
+                f"  aligned {seq_stats['n_aligned']}/{seq_stats['n_traj']} residues "
+                f"({seq_stats['identity']:.1%} identity), "
+                f"offsets {seq_stats['offsets']}", level='minimal')
+            chain_sel = f"chainid {chain} and " if chain else ""
+            available = set(u.select_atoms(f"{chain_sel}backbone").residues.resids)
+            resids, missing_info = map_conserved_resids_aligned(
+                bw_map, conserved_bw, seq_map, available)
+        else:
+            resids, missing_info = map_conserved_resids(
+                bw_map, conserved_bw, u,
+                chain=chain,
+                resid_offset=resid_offset)
 
         imputation = None
         if missing_info:
@@ -464,7 +475,7 @@ class FultonMarketAnalysis():
                 raise Exception(
                     f"{n_missing} conserved BW positions are missing — "
                     f"too many for mean imputation (limit: 2).\n{lines}\n\n"
-                    f"Retrain with generate_pca_gpcrs.py --bw_exclude "
+                    f"Retrain with chimpss-generate-pca --bw_exclude "
                     f"to remove these positions.")
 
             self._printf(

@@ -245,15 +245,24 @@ class Structure_Analyzer:
                 f"{self.meta['structure']['pdb_code']},"
                 f"{self.meta['structure']['protein']}")
 
-    def fetch_all(self):
-        """Fetch all remote data, using the disk cache when available."""
+    def fetch_all(self, minimal=True):
+        """Fetch the remote data for this entry, using the disk cache when available.
+
+        ``minimal=True`` (the default) skips the gene record and the
+        gene-to-structure alignment.  Nothing in the package reads either --
+        they are fetched, cached and never consulted -- and they are two of the
+        four GPCRdb calls per structure, so skipping them roughly halves the
+        time to build a basis over the ~1500 structures GPCRdb now lists.
+        Pass ``minimal=False`` to populate them anyway.
+        """
         try:
             cached = self.load_cache()
             if not cached:
                 self.request_structure_info()
-                self.request_gene_info()
                 self.request_naming_info()
-                self.request_gene_structure_alignment()
+                if not minimal:
+                    self.request_gene_info()
+                    self.request_gene_structure_alignment()
                 self.save_cache()
             self.request_rcsb_pdb(and_load=False)
             return True, None
@@ -365,11 +374,11 @@ def validate_numbering(observed, gpcrdb_seq, identity_threshold=0.90):
 
 # ── parallel fetch ────────────────────────────────────────────────────────────
 
-def fetch_all_parallel(tests, max_workers=16):
+def fetch_all_parallel(tests, max_workers=16, minimal=True):
     """Call fetch_all() on each Structure_Analyzer in parallel threads."""
     results = {}
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(t.fetch_all): t.pdb_code for t in tests}
+        futures = {pool.submit(t.fetch_all, minimal): t.pdb_code for t in tests}
         for fut in as_completed(futures):
             code          = futures[fut]
             results[code] = fut.result()
@@ -1027,3 +1036,95 @@ def _verbose_training_comparison(projections, meta, prefix):
         closest = " ← closest" if dist == min(dists.values()) else ""
         print(f"    {state:>14}:  {dist:8.2f}{closest}")
     print()
+
+
+# ── plotting ──────────────────────────────────────────────────────────────────
+
+#: Colours for GPCRdb activation states, used by :func:`plot_pc_landscape`.
+STATE_COLORS = {
+    'Active': '#c2453b',
+    'Inactive': '#2f6f9f',
+    'Intermediate': '#d8a13a',
+    'Other': '#8d8d8d',
+    'Unknown': '#8d8d8d',
+}
+
+
+def load_training_projections(prefix):
+    """Return ``(projections, states, explained_variance_ratio)`` for a model.
+
+    The projections are the training structures' own coordinates in the space,
+    written by ``chimpss-generate-pca``; ``states`` is the GPCRdb activation
+    state of each, which is what makes the axes interpretable.
+    """
+    import joblib
+
+    train = np.load(f'{prefix}_train_projections.npy')
+    with open(f'{prefix}_meta.json') as fh:
+        meta = json.load(fh)
+    smeta = meta.get('structure_meta', {})
+    states = [smeta.get(c, {}).get('state') or 'Unknown'
+              for c in meta['codes_retained']]
+    evr = joblib.load(f'{prefix}_pca.joblib').explained_variance_ratio_
+    return train, states, np.asarray(evr)
+
+
+def plot_pc_landscape(prefix, projections=None, pc_x=0, pc_y=1, ax=None,
+                      trajectory_label='simulation', colorbar_label='block',
+                      frame_values=None, savefig=None, dpi=150,
+                      training_alpha=0.55, training_size=22):
+    """Scatter the training structures on two PCs, optionally over-plotting a run.
+
+    The experimental structures give the map -- active and inactive receptors
+    occupy opposite ends of PC1 -- and a projected trajectory can be drawn on
+    top of it, coloured by time, so that drift along an interpretable axis is
+    visible rather than inferred.
+
+    ``projections`` is the ``(n_frames, n_components)`` array from
+    :func:`~chimpss.analysis.pca_equilibration.pangpcr_projection` or
+    :meth:`FultonMarketAnalysis.project_gpcr_pca`.  ``frame_values`` supplies
+    the colour scale (block index, nanoseconds, frame number); it defaults to
+    the frame index.
+
+    Returns the matplotlib axes.
+    """
+    import matplotlib.pyplot as plt
+
+    train, states, evr = load_training_projections(prefix)
+    if ax is None:
+        _, ax = plt.subplots(figsize=(7.2, 6.0))
+
+    order = ['Inactive', 'Intermediate', 'Active']
+    seen = [s for s in order if s in set(states)]
+    seen += sorted(set(states) - set(order))
+    for state in seen:
+        mask = np.array([s == state for s in states])
+        ax.scatter(train[mask, pc_x], train[mask, pc_y],
+                   s=training_size, alpha=training_alpha,
+                   c=STATE_COLORS.get(state, '#8d8d8d'),
+                   edgecolors='none',
+                   label=f'{state} ({int(mask.sum())})')
+
+    if projections is not None and len(projections):
+        x, y = projections[:, pc_x], projections[:, pc_y]
+        t = (np.asarray(frame_values, dtype=float) if frame_values is not None
+             else np.arange(len(x), dtype=float))
+        ax.plot(x, y, c='0.25', lw=0.6, alpha=0.5, zorder=3)
+        sc = ax.scatter(x, y, c=t, cmap='viridis', s=14, zorder=4,
+                        edgecolors='none', label=trajectory_label)
+        cb = ax.figure.colorbar(sc, ax=ax, pad=0.02)
+        cb.set_label(colorbar_label)
+        ax.scatter(x[0], y[0], marker='o', s=110, facecolors='none',
+                   edgecolors='k', lw=1.6, zorder=5)
+        ax.scatter(x[-1], y[-1], marker='X', s=130, c='k', zorder=5)
+
+    ax.set_xlabel(f'PC{pc_x + 1}  ({evr[pc_x]:.1%} of training variance)')
+    ax.set_ylabel(f'PC{pc_y + 1}  ({evr[pc_y]:.1%})')
+    ax.axhline(0, c='0.85', lw=0.8, zorder=0)
+    ax.axvline(0, c='0.85', lw=0.8, zorder=0)
+    ax.legend(frameon=False, fontsize=9, loc='best')
+    ax.figure.tight_layout()
+
+    if savefig:
+        ax.figure.savefig(savefig, dpi=dpi, bbox_inches='tight')
+    return ax

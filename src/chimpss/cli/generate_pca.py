@@ -63,6 +63,10 @@ def parse_args():
                         '(default: 100.0)')
     p.add_argument('--workers', type=int, default=16,
                    help='Parallel HTTP fetch workers (default: 16)')
+    p.add_argument('--full_metadata', action='store_true',
+                   help='Also fetch the gene record and gene-structure alignment. '
+                        'Nothing reads them; they double the GPCRdb calls per '
+                        'structure.')
     p.add_argument('--no_validate_numbering', action='store_true',
                    help='Trust PDB author numbering as GPCRdb sequence numbering '
                         'without checking it against the observed sequence. '
@@ -90,7 +94,8 @@ def main():
 
     tests = [Structure_Analyzer(pid, stor_dir=args.stor_dir) for pid in pdb_ids]
     print(f"Fetching data ({args.workers} parallel workers)...")
-    fetch_results = fetch_all_parallel(tests, max_workers=args.workers)
+    fetch_results = fetch_all_parallel(tests, max_workers=args.workers,
+                                       minimal=not args.full_metadata)
     tests = [t for t in tests if fetch_results.get(t.pdb_code, (False,))[0]]
     print(f"  {len(tests)} / {len(pdb_ids)} structures fetched successfully")
 
