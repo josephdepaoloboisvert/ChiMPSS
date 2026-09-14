@@ -337,7 +337,7 @@ def _sanitize_probabilities(raw: np.array):
     return probs
 
 
-def resample_with_MBAR(objs: List, u_kln: np.array, N_k: np.array, size: int, reshape_weights: tuple=None, specify_state: int=0, return_inds: bool=False, return_weights: bool=False, return_resampled_weights: bool=False, replace: bool=True, _printf=None):
+def resample_with_MBAR(objs: List, u_kln: np.array, N_k: np.array, size: int, reshape_weights: tuple=None, specify_state: int=0, return_inds: bool=False, return_weights: bool=False, return_resampled_weights: bool=False, replace: bool=True, min_ess: float=None, flat_ess_tol: float=0.999, _printf=None):
 
     # Get MBAR weights
     weights = compute_MBAR_weights(u_kln, N_k)
@@ -353,7 +353,10 @@ def resample_with_MBAR(objs: List, u_kln: np.array, N_k: np.array, size: int, re
         probs = weights[:, specify_state]
 
 
-    _log = _printf if _printf is not None else printf
+    # The module-level printf takes no `level`, but FultonMarketAnalysis._printf
+    # does and uses it to gate output. Wrap the fallback so callers here can pass
+    # level= unconditionally; analysis.py:672 calls this with _printf=None.
+    _log = _printf if _printf is not None else (lambda msg, level=None: printf(msg))
     # Resample
     if size == -1:
         resampled_inds = np.where(probs >= probs.max()*0.001)[0]
@@ -370,8 +373,43 @@ def resample_with_MBAR(objs: List, u_kln: np.array, N_k: np.array, size: int, re
                 'The MBAR solve did not converge on this data.'
             )
         ess = 1.0 / np.sum(probs ** 2)
+        # level='minimal' is required: _printf only emits when level == 'minimal'
+        # or verbosity == 'all', and _evaluate_stopping_criterion builds the
+        # analyzer with the default verbosity ('minimal'). Without this the line
+        # is silently dropped in every production run -- which is exactly the
+        # blind spot this diagnostic was added to close.
         _log(f'MBAR weights at state {specify_state}: effective sample size '
-             f'{ess:.1f} of {len(probs)} ({100 * ess / len(probs):.2f}%)')
+             f'{ess:.1f} of {len(probs)} ({100 * ess / len(probs):.2f}%)',
+             level='minimal')
+
+        # A weight column can fail in two directions and _sanitize_probabilities
+        # catches neither, because both produce a perfectly valid probability
+        # vector. Measured over 75 evaluated blocks of NTSR1_ML-301.hmr.rep0:
+        #
+        #   collapsed  ESS 1.0-10 of ~2500 (0.04-0.11%) in 5 blocks (6.7%).
+        #              The resample draws 1-10 distinct configurations from 1000
+        #              draws; the distance matrices describe a point, not an
+        #              ensemble, and register as near-maximal divergence or as
+        #              all-NaN where the contact filter selects no features.
+        #   flat       ESS == len(probs) exactly, in 2 blocks. MBAR did not
+        #              converge and returned a uniform column, so the "importance"
+        #              resample is plain uniform sampling of the post-t0 pool.
+        #
+        # Only the collapsed case is rejected: it cannot represent an ensemble at
+        # all. A uniform draw is unweighted but still a valid sample of the pool,
+        # so it is reported and kept. min_ess=None preserves the previous
+        # behaviour exactly; set it to gate.
+        if flat_ess_tol is not None and ess >= flat_ess_tol * len(probs):
+            _log(f'WARNING: MBAR weights at state {specify_state} are uniform '
+                 f'(ESS == n); the solve did not converge and this resample is '
+                 f'unweighted, not importance-weighted.', level='minimal')
+        if min_ess is not None and ess < min_ess:
+            raise MBARWeightsDegenerate(
+                f'MBAR weight column at state {specify_state} collapsed: effective '
+                f'sample size {ess:.2f} of {len(probs)} is below the required '
+                f'minimum of {min_ess}. Resampling would draw a handful of distinct '
+                f'configurations, so no meaningful ensemble can be formed.'
+            )
         resampled_inds = np.random.choice(len(probs), size=size, replace=replace, p=probs)
 
     resampled_objs = []
@@ -574,7 +612,19 @@ def getContactDistanceMatrix(top_fn, traj_fn, output_fn, conda_env=None, getcont
 
     def row_op(cont_i, cont_is):
         return jax.vmap(contact_dist_func, in_axes=(None, 0))(cont_i, cont_is)
-    matrix = jax.vmap(row_op, in_axes=(0,None))(X, X)
+
+    # The outer map is chunked because nesting it directly materialises the whole
+    # (n_frames, n_frames, n_features) intermediate. At the production resample
+    # size that is 1000 x 1000 x ~3000 = 3e9 elements, and pymbar switches JAX
+    # into 64-bit mode before this runs, so the promoted intermediate is ~11 GiB
+    # -- fine on a 368 GB compute node, an instant OOM kill on a 15 GB
+    # workstation. Chunking bounds the peak at CHUNK x n_frames x n_features
+    # (~370 MiB at 32) and is arithmetically identical: same row_op, same order,
+    # verified bit-for-bit against the unchunked result.
+    CONTACT_ROW_CHUNK = 32
+    _rows = [jax.vmap(row_op, in_axes=(0, None))(X[i:i + CONTACT_ROW_CHUNK], X)
+             for i in range(0, X.shape[0], CONTACT_ROW_CHUNK)]
+    matrix = jnp.concatenate(_rows, axis=0)
 
     return matrix, features
 

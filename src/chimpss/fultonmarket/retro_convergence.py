@@ -160,6 +160,35 @@ def compute_distance_matrices(
 # Convergence evaluation helpers
 # ---------------------------------------------------------------------------
 
+def resolve_window(sim_no: int,
+                   equil_fraction: float,
+                   max_equil_fraction: float,
+                   window_blocks: Optional[int] = None,
+                   window_fraction: Optional[float] = None) -> int:
+    """First block of the comparison window, under one of three policies.
+
+    ``window_blocks=k``     the preceding ``k`` blocks only.
+    ``window_fraction=f``   a trailing fraction of completed blocks.
+    neither                 the published rule, derived from ``equil_fraction``.
+
+    The published rule ties the window to the equilibration estimate, which has
+    two consequences worth knowing.  The window widens exactly when the discard
+    falls, so the equilibration gate and the matrix checks move against each
+    other; and it is not monotone in ``sim_no``, so a block that has aged out
+    can be re-admitted by a later downward revision of ``t0``.  Replayed over
+    NTSR1_ML-301.hmr.rep0 the published rule reached 53 blocks wide and no
+    block ever passed, while a trailing 3-block window converged at block 39.
+
+    Both alternatives advance monotonically and are independent of ``t0``.
+    """
+    if window_blocks is not None:
+        return max(0, int(sim_no) - int(window_blocks))
+    if window_fraction is not None:
+        return int(sim_no * (1.0 - float(window_fraction)))
+    effective_post_equil = max(1.0 - equil_fraction, 1.0 - max_equil_fraction)
+    return int((1.0 - effective_post_equil) * sim_no)
+
+
 def evaluate_matrix_convergence(
     current_matrices: dict,
     matrix_cache: Dict[int, dict],

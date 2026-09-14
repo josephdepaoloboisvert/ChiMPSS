@@ -54,6 +54,7 @@ chimpss-recovery         = "chimpss.cli.recovery:main"
 chimpss-algdock          = "chimpss.cli.algdock:main"
 chimpss-motifs           = "chimpss.cli.motifs:main"
 chimpss-run-stats        = "chimpss.cli.run_stats:main"
+chimpss-convergence-report = "chimpss.cli.convergence_report:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

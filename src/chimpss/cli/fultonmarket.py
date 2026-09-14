@@ -46,6 +46,50 @@ def parse_args():
     # Convergence thresholds
     p.add_argument('--n_resample', default=1000, type=int,
                    help='Frames to importance-resample per convergence check. Default 1000.')
+    p.add_argument('--equil_method', default='max_neff', type=str,
+                   help="Equilibration estimator. 'max_neff' (default) is "
+                        "pymbar detect_equilibration, the published behaviour. "
+                        "Alternatives come from chimpss.analysis.equilibration, "
+                        "e.g. 'mser_sqrt' (the sqrt(n)-windowed marginal standard "
+                        "error rule), 'mser_5', 'mser_w5'.")
+    p.add_argument('--equil_monotone', action='store_true',
+                   help='Forbid the equilibration index from moving backwards '
+                        'between blocks. Without this a downward revision of t0 '
+                        're-admits blocks that had already left the comparison '
+                        'window, so the criterion has no ratchet.')
+    p.add_argument('--window_blocks', default=None, type=int,
+                   help='Compare only against the preceding N blocks, instead of every '
+                        'block since the equilibration point. The published rule ties '
+                        'the window to t0, so it widens exactly when the discard falls '
+                        'and is not monotone in block number. Replayed on NTSR1 the '
+                        'published rule reached 53 blocks wide and never passed, while '
+                        'a trailing 3-block window converged at block 39.')
+    p.add_argument('--equil_freeze_after', default=None, type=int,
+                   help='Stop re-deriving t0 once this many blocks have been completed, '
+                        'holding the value reached. Equilibration happens once; '
+                        're-estimating it every block asks a noisy estimator to '
+                        'rediscover a fixed point, and a downward revision re-admits '
+                        'blocks that had already left the comparison window.')
+    p.add_argument('--window_fraction', default=None, type=float,
+                   help='Fix the convergence comparison window at this trailing '
+                        'fraction of completed blocks instead of deriving it from '
+                        't0. Decouples the window from the equilibration gate, '
+                        'which otherwise oppose each other through a shared '
+                        'variable. e.g. 0.25 for the trailing quarter.')
+    p.add_argument('--min_pool_frames', default=None, type=int,
+                   help='Cap t0 so the post-equilibration pool never falls below this '
+                        'many frames. Pool size is what predicts MBAR weight collapse '
+                        '(collapsed blocks had 1-29 frames, healthy ones ~106); this '
+                        'prevents the failure rather than detecting it after the fact, '
+                        'and unlike --min_ess it is knowable before the solve. 35 caught '
+                        'every collapse observed on NTSR1 with no false negatives.')
+    p.add_argument('--min_ess', default=None, type=float,
+                   help='Reject a block whose MBAR weight column collapses below this '
+                        'effective sample size, instead of resampling a handful of '
+                        'distinct configurations. The block is still saved and '
+                        'resumable; it simply contributes no convergence comparison. '
+                        'Omit to preserve the previous behaviour. Measured on NTSR1: '
+                        'collapsed blocks had ESS 1-10, healthy blocks 50-150.')
     p.add_argument('--max_equil_fraction', default=0.75, type=float,
                    help='Max fraction of simulation discardable as equilibration '
                         'before convergence is considered unreliable. Default 0.75.')
@@ -112,6 +156,13 @@ def main():
                minimum_fraction=args.minimum_sim_fraction,
                n_resample=args.n_resample,
                max_equil_fraction=args.max_equil_fraction,
+               min_ess=args.min_ess,
+               min_pool_frames=args.min_pool_frames,
+               equil_method=args.equil_method,
+               equil_monotone=args.equil_monotone,
+               window_fraction=args.window_fraction,
+               window_blocks=args.window_blocks,
+               equil_freeze_after=args.equil_freeze_after,
                frobenius_thresh=args.frobenius_thresh,
                jsd_thresh=args.jsd_thresh,
                getContacts_Info=getContacts_Info)

@@ -197,7 +197,8 @@ class FultonMarketAnalysis():
     # Importance resampling and weights
     # ------------------------------------------------------------------
     def importance_resampling(self, n_samples: int = -1, equilibration_method: str = 'energy',
-                              specify_state: int = 0, replace: bool = True):
+                              specify_state: int = 0, replace: bool = True,
+                              min_ess: float = None):
         """Compute MBAR weights and draw importance-resampled frames."""
         if not hasattr(self, 't0'):
             self.determine_equilibration(equilibration_method=equilibration_method)
@@ -215,6 +216,7 @@ class FultonMarketAnalysis():
                                                                                        return_resampled_weights=True,
                                                                                        specify_state=specify_state,
                                                                                        replace=replace,
+                                                                                       min_ess=min_ess,
                                                                                        _printf=self._printf)
 
     def reshape_weights(self):
@@ -877,6 +879,8 @@ class FultonMarketAnalysis():
     def retro_convergence_report(
         self,
         max_equil_fraction: float = 0.75,
+        window_blocks: int = None,
+        window_fraction: float = None,
         minimum_fraction: float = 0.25,
         frobenius_thresh: float = 0.05,
         jsd_thresh: float = 0.05,
@@ -901,6 +905,7 @@ class FultonMarketAnalysis():
             print_summary_table,
             resolve_cache_dir,
             resolve_traj_paths,
+            resolve_window,
             resolve_write_dir,
             save_matrices,
         )
@@ -957,7 +962,9 @@ class FultonMarketAnalysis():
 
                 min_post_equil       = 1.0 - max_equil_fraction
                 effective_post_equil = max(1.0 - equil_fraction, min_post_equil)
-                first_valid_sim_no   = int((1.0 - effective_post_equil) * sim_no)
+                first_valid_sim_no   = resolve_window(
+                    sim_no, equil_fraction, max_equil_fraction,
+                    window_blocks=window_blocks, window_fraction=window_fraction)
 
                 if sim_no not in matrix_cache:
                     self._printf('  computing distance matrices on-the-fly', level='all')

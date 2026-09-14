@@ -129,6 +129,13 @@ class FultonMarket():
             output_dir: str = os.path.join(os.getcwd(), 'FultonMarket_output/'),
             n_resample: int = 1000,
             max_equil_fraction: float = 0.75,
+            min_ess: float = None,
+            equil_method: str = 'max_neff',
+            equil_monotone: bool = False,
+            min_pool_frames: int = None,
+            equil_freeze_after: int = None,
+            window_fraction: float = None,
+            window_blocks: int = None,
             frobenius_thresh: float = 0.05,
             jsd_thresh: float = 0.10,
             getContacts_Info: dict = None,
@@ -196,6 +203,13 @@ class FultonMarket():
         self.minimum_fraction4convergence = minimum_fraction
         self.n_resample = n_resample
         self.max_equil_fraction = max_equil_fraction
+        self.min_ess = min_ess
+        self.equil_method = equil_method
+        self.equil_monotone = equil_monotone
+        self.min_pool_frames = min_pool_frames
+        self.equil_freeze_after = equil_freeze_after
+        self.window_fraction = window_fraction
+        self.window_blocks = window_blocks
         self.frobenius_thresh = frobenius_thresh
         self.jsd_thresh = jsd_thresh
         self.getContacts_Info = getContacts_Info if getContacts_Info is not None else {}
@@ -241,6 +255,13 @@ class FultonMarket():
         printf(f'temperatures        : {[np.round(T._value, 1) for T in self.temperatures]} K')
         printf(f'n_resample          : {self.n_resample}')
         printf(f'max_equil_fraction  : {self.max_equil_fraction}')
+        printf(f'min_ess             : {self.min_ess}')
+        printf(f'equil_method        : {self.equil_method}')
+        printf(f'equil_monotone      : {self.equil_monotone}')
+        printf(f'min_pool_frames     : {self.min_pool_frames}')
+        printf(f'equil_freeze_after  : {self.equil_freeze_after}')
+        printf(f'window_fraction     : {self.window_fraction}')
+        printf(f'window_blocks       : {self.window_blocks}')
         printf(f'frobenius_thresh    : {self.frobenius_thresh}')
         printf(f'jsd_thresh          : {self.jsd_thresh}')
         printf(f'getContacts_Info    : {self.getContacts_Info}')
@@ -263,6 +284,7 @@ class FultonMarket():
             self.finished = self._evaluate_stopping_criterion(
                 n_resample=self.n_resample,
                 max_equil_fraction=self.max_equil_fraction,
+                min_ess=self.min_ess,
                 frobenius_thresh=self.frobenius_thresh,
                 jsd_thresh=self.jsd_thresh,
                 getContacts_Info=self.getContacts_Info,
@@ -540,7 +562,66 @@ class FultonMarket():
     # on a shape mismatch after eight hours of sampling. broadcast_result puts
     # the same verdict on every rank so they agree on whether to stop.
     @mpiplus.on_single_node(rank=0, broadcast_result=True, sync_nodes=True)
-    def _evaluate_stopping_criterion(self, n_resample=1000, max_equil_fraction=0.75, frobenius_thresh=0.05, jsd_thresh=0.10, getContacts_Info=None, skip_contacts=False):
+    def _frozen_t0(self):
+        """The stored high-water t0, or None when nothing has been recorded yet.
+
+        Reads the same state file the ratchet writes, so freezing and ratcheting
+        compose: the ratchet keeps t0 from regressing while the run is young,
+        and the freeze stops re-deriving it once the estimate has settled.
+        """
+        import json
+
+        path = os.path.join(self.output_dir, 'equilibration_state.json')
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path) as fh:
+                return int(json.load(fh)['t0_high_water'])
+        except Exception as exc:
+            printf(f'WARNING: could not read the frozen t0 from {path} ({exc}).')
+            return None
+
+
+    def _ratchet_t0(self, t0):
+        """Forbid the equilibration index from moving backwards between blocks.
+
+        detect_equilibration maximises (T - t0)/g(t0), an objective that is not
+        guaranteed unimodal; where the autocorrelation estimate is noisy it has
+        competing maxima and the returned t0 alternates between them as the
+        series grows.  Because t0 sets the first block of the comparison
+        window, a downward revision re-admits blocks that had already aged out,
+        so the criterion has no ratchet and progress is handed back.
+
+        The high-water mark lives at the run root rather than inside
+        saved_variables/, because FultonMarketAnalysis globs that directory and
+        int()s each basename -- a stray file there would crash every subsequent
+        analysis.
+        """
+        import json
+
+        path = os.path.join(self.output_dir, 'equilibration_state.json')
+        previous = None
+        if os.path.exists(path):
+            try:
+                with open(path) as fh:
+                    previous = json.load(fh).get('t0_high_water')
+            except Exception as exc:
+                printf(f'WARNING: could not read {path} ({exc}); starting the '
+                       f'ratchet from this block.')
+
+        kept = int(t0) if previous is None else max(int(t0), int(previous))
+        if previous is not None and kept != int(t0):
+            printf(f'Equilibration ratchet: detector returned t0={int(t0)}, '
+                   f'holding the high-water mark t0={kept}.')
+        try:
+            with open(path, 'w') as fh:
+                json.dump({'t0_high_water': kept, 'sim_no': self.sim_no}, fh)
+        except Exception as exc:
+            printf(f'WARNING: could not persist the equilibration ratchet ({exc}).')
+        return kept
+
+
+    def _evaluate_stopping_criterion(self, n_resample=1000, max_equil_fraction=0.75, frobenius_thresh=0.05, jsd_thresh=0.10, getContacts_Info=None, skip_contacts=False, min_ess=None):
         """
         Check whether the simulation should stop by evaluating a series of
         convergence criteria against the current and all previously saved
@@ -592,14 +673,43 @@ class FultonMarket():
 
         # Equilibration
         ave_ener = analyzer.get_average_energy()
-        t0 = detect_energy_equil(ave_ener)
+        # 'max_neff' is detect_equilibration, i.e. the published behaviour.
+        # Anything else selects an alternative estimator from
+        # chimpss.analysis.equilibration; see that module for the validation
+        # of each against series with a known truncation point.
+        if self.equil_method in (None, 'max_neff'):
+            t0 = detect_energy_equil(ave_ener)
+        else:
+            from chimpss.analysis.equilibration import DETECTORS
+            if self.equil_method not in DETECTORS:
+                raise ValueError(f'unknown equil_method {self.equil_method!r}; '
+                                 f'choose from {sorted(DETECTORS)}')
+            t0 = DETECTORS[self.equil_method](ave_ener)
+        if self.equil_freeze_after is not None and self.sim_no >= self.equil_freeze_after:
+            frozen = self._frozen_t0()
+            if frozen is not None:
+                if frozen != t0:
+                    printf(f'Equilibration frozen after block '
+                           f'{self.equil_freeze_after}: detector returned t0={t0}, '
+                           f'holding t0={frozen}.')
+                t0 = frozen
+        if self.equil_monotone:
+            t0 = self._ratchet_t0(t0)
+        if self.min_pool_frames:
+            from chimpss.analysis.equilibration import bound_pool
+            capped = bound_pool(t0, ave_ener.shape[0], self.min_pool_frames)
+            if capped != t0:
+                printf(f'Pool bound: t0={t0} would leave '
+                       f'{ave_ener.shape[0] - t0} frames, below the required '
+                       f'{self.min_pool_frames}; capping t0 to {capped}.')
+                t0 = capped
         equil_fraction = t0 / ave_ener.shape[0]
         printf(f"Currently would discard {100*equil_fraction:.2f}% to energy equilibration")
 
         # Importance resampling and trajectory
         sim_dir = os.path.join(self.output_dir, 'saved_variables', str(self.sim_no))
         try:
-            _ = analyzer.importance_resampling(n_samples=n_resample)
+            _ = analyzer.importance_resampling(n_samples=n_resample, min_ess=min_ess)
         except MBARWeightsDegenerate as exc:
             # A convergence check that cannot be computed is not a reason to
             # destroy the sampling. Three runs (53855971, 53855972, 53856114)
@@ -648,8 +758,19 @@ class FultonMarket():
         actual_post_equil_fraction = 1.0 - equil_fraction         # what MBAR detected
         effective_post_equil_fraction = max(actual_post_equil_fraction, min_post_equil_fraction)
 
-        # Map the effective fraction back to the first valid sim_no
-        first_valid_sim_no = int((1.0 - effective_post_equil_fraction) * self.sim_no)
+        # Map the effective fraction back to the first valid sim_no.
+        #
+        # Deriving the window from t0 couples it to the equilibration gate
+        # through a single variable, and the two then pull against each other:
+        # a low discard satisfies the gate but widens the window to re-admit
+        # early blocks, while a high discard narrows the window but fails the
+        # gate. window_fraction breaks that coupling by fixing the window at a
+        # trailing fraction of completed blocks, which also makes it monotone
+        # in sim_no -- a block that leaves the window cannot re-enter it.
+        from chimpss.fultonmarket.retro_convergence import resolve_window
+        first_valid_sim_no = resolve_window(
+            self.sim_no, equil_fraction, max_equil_fraction,
+            window_blocks=self.window_blocks, window_fraction=self.window_fraction)
 
         # Compare against previous checkpoints in the post-equilibration window only
         frob_results = {name: {} for name in current_matrices}

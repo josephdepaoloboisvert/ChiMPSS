@@ -80,3 +80,79 @@ def test_the_exact_old_failure_is_now_handled():
 
 def test_degenerate_error_is_catchable_and_specific():
     assert issubclass(MBARWeightsDegenerate, RuntimeError)
+
+
+# ---------------------------------------------------------------------------
+# Two-sided ESS gate
+#
+# _sanitize_probabilities rejects a weight column only when it carries no
+# probability mass at all. A column that has collapsed onto one frame, and a
+# column that is perfectly uniform, both sanitize cleanly -- so neither was
+# caught. Over 75 evaluated blocks of NTSR1_ML-301.hmr.rep0 the collapsed case
+# occurred 5 times (6.7%), each producing distance matrices built from 1-10
+# distinct configurations.
+# ---------------------------------------------------------------------------
+
+def _collapsed_column(n=2000, dominant=0.9962):
+    """One frame carrying essentially all the mass -- block 3 / 29 in miniature."""
+    w = np.full(n, (1.0 - dominant) / (n - 1))
+    w[0] = dominant
+    return w
+
+
+def _uniform_column(n=2000):
+    return np.full(n, 1.0 / n)
+
+
+def _healthy_column(n=2000, seed=0):
+    rng = np.random.default_rng(seed)
+    w = rng.lognormal(0.0, 0.6, n)
+    return w / w.sum()
+
+
+def _run(weights, **kw):
+    """Drive resample_with_MBAR with a prescribed weight column."""
+    from unittest import mock
+    from chimpss.fultonmarket import utils as U
+    with mock.patch.object(U, 'compute_MBAR_weights', return_value=weights):
+        return U.resample_with_MBAR(objs=[np.arange(weights.size)],
+                                    u_kln=np.zeros((1, weights.size)),
+                                    N_k=np.array([weights.size]),
+                                    size=1000, **kw)
+
+
+def test_collapsed_column_rejected_when_gate_enabled():
+    from chimpss.fultonmarket.utils import MBARWeightsDegenerate
+    with pytest.raises(MBARWeightsDegenerate, match='collapsed'):
+        _run(_collapsed_column(), min_ess=25)
+
+
+def test_collapsed_column_still_passes_when_gate_disabled():
+    """min_ess=None must preserve the previous behaviour exactly."""
+    out = _run(_collapsed_column(), min_ess=None)
+    assert out is not None
+
+
+def test_healthy_column_survives_the_gate():
+    out = _run(_healthy_column(), min_ess=25)
+    assert out is not None
+
+
+def test_uniform_column_warns_but_is_not_rejected():
+    """A uniform draw is unweighted, not garbage -- report it, keep it."""
+    msgs = []
+    out = _run(_uniform_column(), min_ess=25,
+               _printf=lambda m, level='all': msgs.append(str(m)))
+    assert out is not None
+    assert any('uniform' in m for m in msgs), msgs
+
+
+def test_gate_threshold_separates_real_collapsed_from_real_healthy():
+    """ESS values measured in production: collapsed 1.0-10, healthy 50-150."""
+    from chimpss.fultonmarket.utils import MBARWeightsDegenerate
+    collapsed_ess = 1.0 / np.sum(_collapsed_column() ** 2)
+    healthy_ess = 1.0 / np.sum(_healthy_column() ** 2)
+    assert collapsed_ess < 25 < healthy_ess
+    with pytest.raises(MBARWeightsDegenerate):
+        _run(_collapsed_column(), min_ess=25)
+    assert _run(_healthy_column(), min_ess=25) is not None
