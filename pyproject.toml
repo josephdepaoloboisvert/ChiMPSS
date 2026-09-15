@@ -56,6 +56,7 @@ chimpss-motifs           = "chimpss.cli.motifs:main"
 chimpss-run-stats        = "chimpss.cli.run_stats:main"
 chimpss-convergence-report = "chimpss.cli.convergence_report:main"
 chimpss-pca-equil        = "chimpss.cli.pca_equilibration:main"
+chimpss-convergence-bundle = "chimpss.cli.convergence_bundle:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

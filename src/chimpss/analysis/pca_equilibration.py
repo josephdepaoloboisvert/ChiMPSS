@@ -323,6 +323,20 @@ def project_coordinates(coords_nm: np.ndarray, model: PanGPCRModel,
 # Trajectory projection
 # ---------------------------------------------------------------------------
 
+def model_fingerprint(model: PanGPCRModel) -> str:
+    """Short stable digest of the atom set a model selects.
+
+    The cached coordinate array holds only the atoms one basis asked for, so it
+    is not interchangeable between bases.  Keying the cache on state and stride
+    alone lets a 190-atom model silently load a 204-atom array built by a
+    different basis; the projection then fails on an atom-count mismatch, or
+    worse, succeeds against the wrong atoms if the counts happen to agree.
+    """
+    import hashlib
+    key = f"{model.selection}|{model.n_atoms}|{'|'.join(model.conserved_bw)}"
+    return hashlib.sha1(key.encode()).hexdigest()[:8]
+
+
 def collect_frames(run_dir: str, topology: str, model: PanGPCRModel,
                    naming_info: Sequence[dict], state: int = 0,
                    skip: int = 10, chain_index: int = 0,
@@ -347,7 +361,7 @@ def collect_frames(run_dir: str, topology: str, model: PanGPCRModel,
     """
     import mdtraj as md
 
-    tag = f'state{state}_skip{skip}'
+    tag = f'state{state}_skip{skip}_{model_fingerprint(model)}'
     out_path = os.path.join(run_dir, 'analysis', f'pangpcr_coords_{tag}.npy')
     info_path = os.path.join(run_dir, 'analysis', f'pangpcr_coords_{tag}.json')
     if cache and os.path.exists(out_path) and os.path.exists(info_path):

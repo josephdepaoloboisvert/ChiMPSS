@@ -431,3 +431,39 @@ def test_training_spread_separates_active_from_inactive(model, tmp_path):
     assert out["by_state"]["Active"]["n"] == 20
     assert out["active_inactive_cohens_d"][0] > 10.0      # PC1 separates
     assert out["active_inactive_cohens_d"][1] < 1.0       # PC2 does not
+
+
+# ── projection cache keying ───────────────────────────────────────────────────
+
+from chimpss.analysis.pca_equilibration import model_fingerprint  # noqa: E402
+
+
+def test_model_fingerprint_is_stable(model):
+    assert model_fingerprint(model) == model_fingerprint(model)
+    assert len(model_fingerprint(model)) == 8
+
+
+def test_model_fingerprint_separates_different_atom_sets(model):
+    """The cached coordinates hold only the atoms one basis asked for.
+
+    Keying the cache on state and stride alone let a 190-atom basis load a
+    204-atom array written by a different basis, which fails on an atom-count
+    mismatch -- or silently projects the wrong atoms when the counts agree.
+    """
+    a = model_fingerprint(model)
+    model.meta["conserved_bw"] = BW_LABELS[:-1] + ["7.50"]
+    assert model_fingerprint(model) != a
+
+
+def test_model_fingerprint_separates_different_selections(model):
+    a = model_fingerprint(model)
+    model.meta["selection"] = "backbone"
+    assert model_fingerprint(model) != a
+
+
+def test_model_fingerprint_separates_equal_counts_different_positions(model):
+    """Same atom count, different positions, must not share a cache entry."""
+    a = model_fingerprint(model)
+    model.meta["conserved_bw"] = ["1.50", "2.50", "3.50", "4.50", "6.60"]
+    assert model.n_atoms == 5
+    assert model_fingerprint(model) != a
