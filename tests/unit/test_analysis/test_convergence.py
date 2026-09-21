@@ -333,3 +333,78 @@ def test_clustering_separates_blocks_when_frames_differ_only_by_rotation():
     from scipy.spatial.distance import jensenshannon
     assert float(jensenshannon(good['histograms'][0] + 1e-12,
                                good['histograms'][1] + 1e-12, base=2)) < 0.3
+
+
+# ── cache staleness ───────────────────────────────────────────────────────────
+
+import os  # noqa: E402
+
+from chimpss.analysis.convergence import METRICS, PairwiseCache  # noqa: E402
+from chimpss.analysis.convergence import _complete_blocks  # noqa: E402
+
+
+def _write_block(run_dir, block, n=6, seed=0, metrics=METRICS):
+    """A block directory carrying one distance matrix per metric."""
+    d = os.path.join(run_dir, 'saved_variables', str(block))
+    os.makedirs(d, exist_ok=True)
+    rng = np.random.default_rng(seed + block)
+    for m in metrics:
+        a = rng.random((n, n))
+        np.save(os.path.join(d, f'resampled_{m}_matrix.npy'), (a + a.T) / 2)
+    return d
+
+
+def test_complete_blocks_requires_every_metric(tmp_path):
+    run = str(tmp_path)
+    _write_block(run, 0)
+    _write_block(run, 1, metrics=METRICS[:2])          # one matrix missing
+    assert _complete_blocks(run) == {0}
+
+
+def test_complete_blocks_ignores_empty_matrices(tmp_path):
+    run = str(tmp_path)
+    d = _write_block(run, 0)
+    open(os.path.join(d, f'resampled_{METRICS[0]}_matrix.npy'), 'w').close()
+    assert _complete_blocks(run) == set()
+
+
+def test_pairwise_cache_rebuilds_when_the_run_was_extended(tmp_path):
+    """A cache describing only the old blocks must not be returned silently.
+
+    Extending a run and re-reporting from the stale cache assesses the wrong
+    extent of the simulation, which is worse than paying to rebuild.
+    """
+    run = str(tmp_path)
+    for b in range(3):
+        _write_block(run, b)
+    first = PairwiseCache.build(run, _printf=lambda *a, **k: None)
+    assert set(first.blocks) == {0, 1, 2}
+
+    _write_block(run, 3)
+    msgs = []
+    second = PairwiseCache.build(run, _printf=lambda *a, **k: msgs.append(a[0]))
+    assert set(second.blocks) == {0, 1, 2, 3}
+    assert any('stale' in m for m in msgs)
+
+
+def test_pairwise_cache_is_reused_when_no_blocks_were_added(tmp_path):
+    run = str(tmp_path)
+    for b in range(3):
+        _write_block(run, b)
+    PairwiseCache.build(run, _printf=lambda *a, **k: None)
+    msgs = []
+    again = PairwiseCache.build(run, _printf=lambda *a, **k: msgs.append(a[0]))
+    assert set(again.blocks) == {0, 1, 2}
+    assert not any('stale' in m for m in msgs)
+    assert not any('carry all' in m for m in msgs)     # did not recompute
+
+
+def test_pairwise_cache_overwrite_forces_a_rebuild(tmp_path):
+    run = str(tmp_path)
+    for b in range(2):
+        _write_block(run, b)
+    PairwiseCache.build(run, _printf=lambda *a, **k: None)
+    msgs = []
+    PairwiseCache.build(run, overwrite=True,
+                        _printf=lambda *a, **k: msgs.append(a[0]))
+    assert any('carry all' in m for m in msgs)

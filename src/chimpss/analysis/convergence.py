@@ -73,6 +73,17 @@ def _matrix_path(run_dir: str, block: int, metric: str) -> str:
 # Tier 0 -- all-pairs cache
 # ---------------------------------------------------------------------------
 
+def _complete_blocks(run_dir: str) -> Set[int]:
+    """Blocks whose three distance matrices are all present and non-empty."""
+    out = set()
+    for b in _block_ids(run_dir):
+        if all(os.path.exists(_matrix_path(run_dir, b, m))
+               and os.path.getsize(_matrix_path(run_dir, b, m)) > 0
+               for m in METRICS):
+            out.add(b)
+    return out
+
+
 class PairwiseCache:
     """All-pairs Frobenius and JSD between every block's distance matrices.
 
@@ -115,7 +126,15 @@ class PairwiseCache:
         """Load the cache if present, otherwise compute and save it."""
         path = path or cls.default_path(run_dir)
         if os.path.exists(path) and not overwrite:
-            return cls.load(path)
+            cached = cls.load(path)
+            missing = _complete_blocks(run_dir) - set(cached.blocks)
+            if not missing:
+                return cached
+            # A run that was extended leaves a cache describing only its old
+            # blocks. Returning it silently reports on the wrong extent of the
+            # simulation, which is far worse than paying to rebuild.
+            _printf(f'pairwise cache is stale: {len(missing)} block(s) on disk '
+                    f'are not in it (up to {max(missing)}); rebuilding')
 
         from chimpss.fultonmarket.utils import frobenius_norm, jsd_distance_matrices
 
@@ -304,7 +323,15 @@ def ca_cache(run_dir: str, path: Optional[str] = None, overwrite: bool = False,
     path = path or os.path.join(run_dir, 'analysis', 'ca_coords.npz')
     if os.path.exists(path) and not overwrite:
         d = np.load(path)
-        return {int(k): d[k] for k in d.files}
+        cached = {int(k): d[k] for k in d.files}
+        available = {b for b in _block_ids(run_dir)
+                     if os.path.exists(os.path.join(run_dir, 'saved_variables',
+                                                    str(b), 'resampled_trj.dcd'))}
+        missing = available - set(cached)
+        if not missing:
+            return cached
+        _printf(f'alpha-carbon cache is stale: {len(missing)} block(s) on disk '
+                f'are not in it (up to {max(missing)}); rebuilding')
 
     out: Dict[int, np.ndarray] = {}
     reference = None          # shared alignment frame, set from the first block
