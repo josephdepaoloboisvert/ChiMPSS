@@ -27,6 +27,7 @@ __all__ = [
     'MONO', 'SANS', 'VIRIDIS', 'viridis',
     'pairwise_hist_svg', 'series_svg', 'pool_svg', 'roundtrip_hist_svg',
     'walkers_svg', 'pc_landscape_svg', 'drift_svg',
+    'segmented_drift_svg', 'window_threshold_svg',
 ]
 
 MONO = 'IBM Plex Mono, monospace'
@@ -458,5 +459,152 @@ def drift_svg(block_ids, pc1, centroids, fit):
     out.append(f'<text x="14" y="{(T+H-B)/2:.0f}" fill="var(--ink-2)" '
                f'font-family="IBM Plex Sans, sans-serif" font-size="12" '
                f'text-anchor="middle" transform="rotate(-90 14 {(T+H-B)/2:.0f})">mean PC1</text>')
+    out.append('</svg>')
+    return '\n      '.join(out)
+
+
+def segmented_drift_svg(blocks, values, centroids=None, ylab='mean PC1',
+                        min_segment=15, H=330):
+    """A time series with a fitted changepoint and a linear fit either side.
+
+    A single regression over a non-monotone series reports a slope that
+    describes neither half of it.  On ``NTSR1_ML-301.hmr.rep0`` the whole-run
+    fit gives -0.028 per block, while the series actually falls at -0.089
+    through block 39 and rises at +0.023 thereafter -- a reversal the single
+    fit hides entirely.  The changepoint is chosen to minimise the summed
+    squared error of the two fits.
+
+    ``centroids`` optionally draws labelled reference levels (activation-state
+    means, say) as dashed lines.
+    """
+    from scipy import stats
+
+    W, L, R, T, B = 720, 62, 132, 22, 46
+    x = np.asarray(blocks, float); y = np.asarray(values, float)
+    lo, hi = y.min(), y.max()
+    if centroids:
+        inside = [v for v in centroids.values() if lo - 3 <= v <= hi + 3]
+        if inside:
+            lo, hi = min(lo, min(inside)), max(hi, max(inside))
+    pad = (hi - lo) * 0.12 or 1.0
+    lo, hi = lo - pad, hi + pad
+    sx = lambda v: L + (v - x.min()) / (x.max() - x.min()) * (W - L - R)
+    sy = lambda v: H - B - (v - lo) / (hi - lo) * (H - T - B)
+
+    best = None
+    for k in range(min_segment, len(x) - min_segment):
+        err = 0.0
+        for sl in (slice(0, k), slice(k, None)):
+            a, b, *_ = stats.linregress(x[sl], y[sl])
+            err += float(np.sum((y[sl] - (a * x[sl] + b)) ** 2))
+        if best is None or err < best[1]:
+            best = (k, err)
+    k = best[0] if best else len(x) // 2
+    fits = [stats.linregress(x[:k], y[:k]), stats.linregress(x[k:], y[k:])]
+
+    out = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="Mean principal '
+           f'component 1 per block with a fitted changepoint at block '
+           f'{x[k]:.0f}. The series falls at {fits[0].slope:+.3f} per block '
+           f'before it and rises at {fits[1].slope:+.3f} after, so the drift '
+           f'reverses rather than settling.">']
+    out.append('<g stroke="var(--rule-soft)" stroke-width="1">')
+    yt = np.linspace(lo, hi, 5)
+    for v in yt:
+        out.append(f'<line x1="{L}" y1="{sy(v):.1f}" x2="{W-R}" y2="{sy(v):.1f}"></line>')
+    out.append('</g>')
+
+    for lab, col in (('Active', 'var(--burnt)'), ('Intermediate', '#d8a13a'),
+                     ('Inactive', 'var(--accent)')):
+        v = (centroids or {}).get(lab)
+        if v is None or not (lo <= v <= hi):
+            continue
+        out.append(f'<line x1="{L}" y1="{sy(v):.1f}" x2="{W-R}" y2="{sy(v):.1f}" '
+                   f'stroke="{col}" stroke-width="1" stroke-dasharray="3 3" '
+                   f'stroke-opacity="0.75"></line>')
+        out.append(f'<text x="{W-R+6}" y="{sy(v)+4:.1f}" fill="{col}" '
+                   f'font-family="{SANS}" font-size="10.5">{lab} ({v:+.1f})</text>')
+
+    out.append(f'<line x1="{sx(x[k]):.1f}" y1="{T}" x2="{sx(x[k]):.1f}" y2="{H-B}" '
+               f'stroke="var(--ink)" stroke-width="1" stroke-dasharray="2 4" '
+               f'stroke-opacity="0.55"></line>')
+    out.append(f'<polyline points="{" ".join(f"{sx(a):.1f},{sy(b):.1f}" for a,b in zip(x,y))}" '
+               f'fill="none" stroke="var(--ink-2)" stroke-width="1.4"></polyline>')
+    n = len(x)
+    for i, (a, b) in enumerate(zip(x, y)):
+        out.append(f'<circle cx="{sx(a):.1f}" cy="{sy(b):.1f}" r="2.2" '
+                   f'fill="{viridis(i/(n-1))}"></circle>')
+    for sl, fit, col in ((slice(0, k), fits[0], 'var(--fail)'),
+                         (slice(k, None), fits[1], 'var(--pass)')):
+        xa, xb = x[sl][0], x[sl][-1]
+        out.append(f'<line x1="{sx(xa):.1f}" y1="{sy(fit.slope*xa+fit.intercept):.1f}" '
+                   f'x2="{sx(xb):.1f}" y2="{sy(fit.slope*xb+fit.intercept):.1f}" '
+                   f'stroke="{col}" stroke-width="1.8" stroke-dasharray="6 4"></line>')
+
+    out.append(f'<g fill="var(--muted)" font-family="{MONO}" font-size="11">')
+    for v in range(0, int(x.max()) + 1, 20):
+        out.append(f'<text x="{sx(v):.1f}" y="{H-B+16}" text-anchor="middle">{v}</text>')
+    for v in yt:
+        out.append(f'<text x="{L-8}" y="{sy(v)+4:.1f}" text-anchor="end">{v:.0f}</text>')
+    out.append('</g>')
+    out.append(f'<text x="{(L+W-R)/2:.0f}" y="{H-5}" fill="var(--ink-2)" '
+               f'font-family="{SANS}" font-size="12" text-anchor="middle">block</text>')
+    out.append(f'<text x="13" y="{(T+H-B)/2:.0f}" fill="var(--ink-2)" font-family="{SANS}" '
+               f'font-size="12" text-anchor="middle" '
+               f'transform="rotate(-90 13 {(T+H-B)/2:.0f})">{ylab}</text>')
+    out.append(f'<text x="{sx(x[k])+5:.1f}" y="{T+12}" fill="var(--ink)" '
+               f'font-family="{MONO}" font-size="10">changepoint block {x[k]:.0f}</text>')
+    out.append('</svg>')
+    return '\n      '.join(out), {'changepoint': float(x[k]),
+                                  'before': {'slope': float(fits[0].slope),
+                                             'r': float(fits[0].rvalue),
+                                             'p': float(fits[0].pvalue)},
+                                  'after': {'slope': float(fits[1].slope),
+                                            'r': float(fits[1].rvalue),
+                                            'p': float(fits[1].pvalue)}}
+
+
+def window_threshold_svg(widths, needed, current=0.10, noise_floor=None):
+    """Minimum JSD threshold each comparison window would have required."""
+    W, H, L, R, T, B = 720, 320, 66, 40, 22, 46
+    y = np.asarray(needed, float)
+    hi = max(y.max(), current) * 1.18
+    bw = (W - L - R) / len(widths)
+    sy = lambda v: H - B - v / hi * (H - T - B)
+
+    out = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="Minimum '
+           f'Jensen-Shannon threshold each comparison window would have needed '
+           f'to converge, against the {current} threshold in use.">']
+    if noise_floor:
+        out.append(f'<rect x="{L}" y="{sy(noise_floor):.1f}" width="{W-L-R}" '
+                   f'height="{H-B-sy(noise_floor):.1f}" fill="var(--accent-soft)" '
+                   f'fill-opacity="0.6"></rect>')
+    out.append('<g stroke="var(--rule-soft)" stroke-width="1">')
+    yt = np.linspace(0, hi, 5)
+    for v in yt:
+        out.append(f'<line x1="{L}" y1="{sy(v):.1f}" x2="{W-R}" y2="{sy(v):.1f}"></line>')
+    out.append('</g>')
+    for i, (w, v) in enumerate(zip(widths, y)):
+        x = L + i * bw + bw * 0.22
+        col = 'var(--pass)' if v <= current else 'var(--burnt)'
+        out.append(f'<rect x="{x:.1f}" y="{sy(v):.1f}" width="{bw*0.56:.1f}" '
+                   f'height="{H-B-sy(v):.1f}" fill="{col}" rx="1"></rect>')
+        out.append(f'<text x="{x+bw*0.28:.1f}" y="{sy(v)-6:.1f}" fill="var(--ink-2)" '
+                   f'font-family="{MONO}" font-size="10.5" text-anchor="middle">{v:.3f}</text>')
+        out.append(f'<text x="{x+bw*0.28:.1f}" y="{H-B+16}" fill="var(--muted)" '
+                   f'font-family="{MONO}" font-size="11" text-anchor="middle">{w}</text>')
+    out.append(f'<line x1="{L}" y1="{sy(current):.1f}" x2="{W-R}" y2="{sy(current):.1f}" '
+               f'stroke="var(--ink)" stroke-width="1.3" stroke-dasharray="5 3"></line>')
+    out.append(f'<text x="{L+6}" y="{sy(current)-6:.1f}" fill="var(--ink)" '
+               f'font-family="{MONO}" font-size="10.5">threshold in use {current:.2f}</text>')
+    out.append(f'<g fill="var(--muted)" font-family="{MONO}" font-size="11">')
+    for v in yt:
+        out.append(f'<text x="{L-8}" y="{sy(v)+4:.1f}" text-anchor="end">{v:.2f}</text>')
+    out.append('</g>')
+    out.append(f'<text x="{(L+W-R)/2:.0f}" y="{H-5}" fill="var(--ink-2)" '
+               f'font-family="{SANS}" font-size="12" text-anchor="middle">'
+               f'comparison window (blocks)</text>')
+    out.append(f'<text x="14" y="{(T+H-B)/2:.0f}" fill="var(--ink-2)" font-family="{SANS}" '
+               f'font-size="12" text-anchor="middle" '
+               f'transform="rotate(-90 14 {(T+H-B)/2:.0f})">JSD threshold required</text>')
     out.append('</svg>')
     return '\n      '.join(out)

@@ -9,10 +9,13 @@ here rather than by eye.
 import numpy as np
 import pytest
 
-from chimpss.analysis.report_figures import (VIRIDIS, pairwise_hist_svg,
+from chimpss.analysis.report_figures import (VIRIDIS, drift_svg,
+                                             pairwise_hist_svg,
                                              pc_landscape_svg, pool_svg,
-                                             roundtrip_hist_svg, series_svg,
-                                             viridis, walkers_svg, drift_svg)
+                                             roundtrip_hist_svg,
+                                             segmented_drift_svg, series_svg,
+                                             viridis, walkers_svg,
+                                             window_threshold_svg)
 from chimpss.analysis.report_html import (HEAD, check_document, check_svg_bounds,
                                           figure, page)
 
@@ -59,6 +62,12 @@ def _all_figures(pairwise):
                                       np.array([0.25, 0.15, 0.10, 0.05])),
         'drift': drift_svg(np.arange(30), np.linspace(5, -5, 30), cent,
                            {'slope': -0.34, 'intercept': 5.0}),
+        'segmented': segmented_drift_svg(
+            list(range(60)),
+            np.concatenate([np.linspace(0, -8, 25), np.linspace(-8, -4, 35)]),
+            cent)[0],
+        'window': window_threshold_svg([1, 3, 5, 10], [0.03, 0.08, 0.14, 0.25],
+                                       current=0.10, noise_floor=0.06),
     }
 
 
@@ -182,3 +191,91 @@ def test_check_document_flags_a_clipped_figure():
     html = ('<section>' + figure('<svg viewBox="0 0 100 50">'
             '<circle cx="500" cy="25" r="2"></circle></svg>', 'c') + '</section>')
     assert any('outside viewBox' in p for p in check_document(html))
+
+
+# ── segmented drift ───────────────────────────────────────────────────────────
+
+def _vee(n=80, turn=30, down=-0.3, up=0.1, noise=0.0, seed=0):
+    x = np.arange(n, dtype=float)
+    y = np.where(x < turn, down * x, down * turn + up * (x - turn))
+    if noise:
+        y = y + np.random.default_rng(seed).normal(0, noise, n)
+    return list(x), y
+
+
+def test_segmented_drift_recovers_a_planted_changepoint():
+    x, y = _vee(turn=30)
+    _, st = segmented_drift_svg(x, y)
+    assert abs(st['changepoint'] - 30) <= 3
+
+
+def test_segmented_drift_recovers_both_slopes():
+    x, y = _vee(turn=30, down=-0.3, up=0.1)
+    _, st = segmented_drift_svg(x, y)
+    assert st['before']['slope'] == pytest.approx(-0.3, abs=0.05)
+    assert st['after']['slope'] == pytest.approx(0.1, abs=0.05)
+    assert st['before']['slope'] < 0 < st['after']['slope']
+
+
+def test_segmented_drift_survives_noise():
+    x, y = _vee(turn=40, noise=0.25, seed=3)
+    _, st = segmented_drift_svg(x, y)
+    assert abs(st['changepoint'] - 40) <= 8
+    assert st['before']['slope'] < 0 < st['after']['slope']
+
+
+def test_segmented_drift_on_a_monotone_series_reports_one_direction():
+    """No real changepoint: both segments must still slope the same way."""
+    x = list(range(60))
+    y = np.linspace(0.0, -6.0, 60)
+    _, st = segmented_drift_svg(x, y)
+    assert st['before']['slope'] < 0
+    assert st['after']['slope'] < 0
+
+
+def test_segmented_drift_respects_min_segment():
+    x, y = _vee(n=80, turn=30)
+    _, st = segmented_drift_svg(x, y, min_segment=25)
+    assert 25 <= st['changepoint'] <= 55
+
+
+def test_segmented_drift_draws_centroid_levels_in_range():
+    x, y = _vee(turn=30)
+    svg, _ = segmented_drift_svg(x, y, {'Active': 500.0, 'Intermediate': -5.0})
+    assert 'Intermediate' in svg          # inside the data range
+    assert 'Active' not in svg            # far outside it, so not drawn
+
+
+def test_segmented_drift_reports_significance():
+    x, y = _vee(turn=30, noise=0.2, seed=1)
+    _, st = segmented_drift_svg(x, y)
+    for half in ('before', 'after'):
+        assert set(st[half]) == {'slope', 'r', 'p'}
+        assert 0.0 <= st[half]['p'] <= 1.0
+
+
+# ── window thresholds ─────────────────────────────────────────────────────────
+
+def test_window_threshold_colours_bars_by_the_threshold_in_use():
+    svg = window_threshold_svg([1, 3, 5], [0.03, 0.08, 0.25], current=0.10)
+    assert svg.count('var(--pass)') == 2       # 0.03 and 0.08 clear it
+    assert svg.count('var(--burnt)') == 1      # 0.25 does not
+
+
+def test_window_threshold_labels_every_width():
+    svg = window_threshold_svg([1, 3, 5, 10, 20], [0.03, 0.05, 0.06, 0.14, 0.24])
+    for w in (1, 3, 5, 10, 20):
+        assert f'>{w}</text>' in svg
+
+
+def test_window_threshold_noise_floor_is_optional():
+    with_floor = window_threshold_svg([1, 3], [0.03, 0.08], noise_floor=0.05)
+    without = window_threshold_svg([1, 3], [0.03, 0.08])
+    assert 'accent-soft' in with_floor
+    assert 'accent-soft' not in without
+
+
+def test_window_threshold_handles_all_bars_above_the_threshold():
+    svg = window_threshold_svg([5, 10, 20], [0.15, 0.20, 0.30], current=0.10)
+    assert 'var(--pass)' not in svg
+    assert check_svg_bounds(svg) == []
