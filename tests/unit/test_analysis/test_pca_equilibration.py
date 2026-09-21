@@ -467,3 +467,69 @@ def test_model_fingerprint_separates_equal_counts_different_positions(model):
     model.meta["conserved_bw"] = ["1.50", "2.50", "3.50", "4.50", "6.60"]
     assert model.n_atoms == 5
     assert model_fingerprint(model) != a
+
+
+def test_collect_frames_detects_a_stale_projection_cache(model, tmp_path, monkeypatch):
+    """An extended run must not silently reproduce its old projection.
+
+    The failure is insidious: returning coordinates for the old blocks yields
+    exactly the previous drift statistics, which reads as reassuring agreement
+    rather than as a bug.
+    """
+    import json as _json
+
+    import chimpss.analysis.pca_equilibration as pe
+
+    run = tmp_path / "run"
+    (run / "analysis").mkdir(parents=True)
+    for b in (0, 1, 2):
+        d = run / "saved_variables" / str(b)
+        d.mkdir(parents=True)
+        (d / "positions.npy").write_bytes(b"\x00")
+
+    tag = f"state0_skip10_{pe.model_fingerprint(model)}"
+    np.save(run / "analysis" / f"pangpcr_coords_{tag}.npy",
+            np.zeros((5, len(BW_LABELS), 3), dtype=np.float32))
+    with open(run / "analysis" / f"pangpcr_coords_{tag}.json", "w") as fh:
+        _json.dump({"blocks": [0, 1], "n_frames": 5, "missing": []}, fh)
+
+    msgs = []
+    monkeypatch.setattr(pe, "_block_dirs",
+                        lambda rd: [str(run / "saved_variables" / str(b))
+                                    for b in (0, 1, 2)])
+    # rebuilding needs a topology we do not have; stop after the staleness check
+    monkeypatch.setattr(pe.md if hasattr(pe, "md") else pe, "__name__", "pe",
+                        raising=False)
+    with pytest.raises(Exception):
+        pe.collect_frames(str(run), "missing.pdb", model, [],
+                          _printf=lambda *a, **k: msgs.append(a[0]))
+    assert any("stale" in m for m in msgs)
+
+
+def test_collect_frames_reuses_a_current_projection_cache(model, tmp_path, monkeypatch):
+    import json as _json
+
+    import chimpss.analysis.pca_equilibration as pe
+
+    run = tmp_path / "run"
+    (run / "analysis").mkdir(parents=True)
+    for b in (0, 1):
+        d = run / "saved_variables" / str(b)
+        d.mkdir(parents=True)
+        (d / "positions.npy").write_bytes(b"\x00")
+
+    tag = f"state0_skip10_{pe.model_fingerprint(model)}"
+    coords = np.zeros((5, len(BW_LABELS), 3), dtype=np.float32)
+    np.save(run / "analysis" / f"pangpcr_coords_{tag}.npy", coords)
+    with open(run / "analysis" / f"pangpcr_coords_{tag}.json", "w") as fh:
+        _json.dump({"blocks": [0, 1], "n_frames": 5, "missing": []}, fh)
+
+    monkeypatch.setattr(pe, "_block_dirs",
+                        lambda rd: [str(run / "saved_variables" / str(b))
+                                    for b in (0, 1)])
+    msgs = []
+    out, info = pe.collect_frames(str(run), "missing.pdb", model, [],
+                                  _printf=lambda *a, **k: msgs.append(a[0]))
+    assert out.shape == coords.shape
+    assert info["blocks"] == [0, 1]
+    assert not msgs

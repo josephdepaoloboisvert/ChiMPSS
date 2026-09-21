@@ -366,7 +366,20 @@ def collect_frames(run_dir: str, topology: str, model: PanGPCRModel,
     info_path = os.path.join(run_dir, 'analysis', f'pangpcr_coords_{tag}.json')
     if cache and os.path.exists(out_path) and os.path.exists(info_path):
         with open(info_path) as fh:
-            return np.load(out_path), json.load(fh)
+            info = json.load(fh)
+        available = {int(os.path.basename(d)) for d in _block_dirs(run_dir)
+                     if os.path.exists(os.path.join(d, 'positions.npy'))}
+        if max_blocks is not None:
+            available = set(sorted(available)[:max_blocks])
+        missing = available - set(info.get('blocks', []))
+        if not missing:
+            return np.load(out_path), info
+        # An extended run leaves coordinates covering only its old blocks.
+        # Returning them silently projects the wrong extent of the simulation
+        # and reproduces the previous answer exactly, which looks like
+        # reassuring agreement rather than a bug.
+        _printf(f'projection cache is stale: {len(missing)} block(s) on disk are '
+                f'not in it (up to {max(missing)}); rebuilding')
 
     top_traj = md.load(topology)
     top = top_traj.topology
