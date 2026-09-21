@@ -6,6 +6,8 @@ that fail silently in a browser: a mark placed outside the viewBox is clipped
 without error, and a malformed fragment renders as nothing. Both are caught
 here rather than by eye.
 """
+import re
+
 import numpy as np
 import pytest
 
@@ -13,6 +15,7 @@ from chimpss.analysis.report_figures import (VIRIDIS, drift_svg,
                                              pairwise_hist_svg,
                                              pc_landscape_svg, pool_svg,
                                              roundtrip_hist_svg,
+                                             multi_series_svg,
                                              segmented_drift_svg, series_svg,
                                              viridis, walkers_svg,
                                              window_threshold_svg)
@@ -68,6 +71,12 @@ def _all_figures(pairwise):
             cent)[0],
         'window': window_threshold_svg([1, 3, 5, 10], [0.03, 0.08, 0.14, 0.25],
                                        current=0.10, noise_floor=0.06),
+        'multi': multi_series_svg(
+            list(range(40)),
+            {'last 1': list(np.linspace(0.30, 0.05, 40)),
+             'last 5': [None] * 5 + list(np.linspace(0.50, 0.12, 35))},
+            'worst JSD', threshold=0.10, threshold_label='0.10',
+            band=0.06, band_label='noise floor'),
     }
 
 
@@ -279,3 +288,91 @@ def test_window_threshold_handles_all_bars_above_the_threshold():
     svg = window_threshold_svg([5, 10, 20], [0.15, 0.20, 0.30], current=0.10)
     assert 'var(--pass)' not in svg
     assert check_svg_bounds(svg) == []
+
+
+# ── multi-series timeseries ───────────────────────────────────────────────────
+
+def _polylines(svg):
+    return re.findall(r'<polyline points="([^"]+)"', svg)
+
+
+def test_multi_series_draws_one_line_per_series():
+    svg = multi_series_svg(list(range(10)),
+                           {'a': [0.1] * 10, 'b': [0.2] * 10, 'c': [0.3] * 10},
+                           'y')
+    assert len(_polylines(svg)) == 3
+
+
+def test_multi_series_breaks_the_line_at_gaps():
+    """A policy with no answer for a block must leave a gap, not interpolate."""
+    svg = multi_series_svg(list(range(6)),
+                           {'a': [0.1, 0.2, None, 0.3, 0.4, 0.5]}, 'y')
+    lines = _polylines(svg)
+    assert len(lines) == 2
+    assert len(lines[0].split()) == 2 and len(lines[1].split()) == 3
+
+
+def test_multi_series_omits_a_run_of_one_point():
+    svg = multi_series_svg(list(range(4)), {'a': [0.1, None, 0.2, None]}, 'y')
+    assert _polylines(svg) == []
+
+
+def test_multi_series_leading_gap_starts_the_line_late():
+    """A wide window has no answer until enough blocks precede it."""
+    svg = multi_series_svg(list(range(8)),
+                           {'wide': [None] * 4 + [0.3, 0.2, 0.15, 0.1]}, 'y')
+    assert len(_polylines(svg)[0].split()) == 4
+
+
+def test_multi_series_draws_the_threshold_and_band():
+    svg = multi_series_svg(list(range(10)), {'a': [0.2] * 10}, 'y',
+                           threshold=0.10, threshold_label='thresh',
+                           band=0.05, band_label='floor')
+    assert 'stroke-dasharray="5 3"' in svg
+    assert 'thresh' in svg and 'floor' in svg
+    assert 'accent-soft' in svg
+
+
+def test_multi_series_threshold_is_optional():
+    svg = multi_series_svg(list(range(10)), {'a': [0.2] * 10}, 'y')
+    assert 'accent-soft' not in svg
+    assert check_svg_bounds(svg) == []
+
+
+def test_multi_series_labels_every_series_in_the_legend():
+    labels = {'last 1': [0.1] * 10, 'last 10': [0.3] * 10, 'last 20': [0.5] * 10}
+    svg = multi_series_svg(list(range(10)), labels, 'y')
+    for lab in labels:
+        assert f'>{lab}</text>' in svg
+
+
+def test_multi_series_gives_each_series_its_own_colour():
+    svg = multi_series_svg(list(range(10)),
+                           {'a': [0.1] * 10, 'b': [0.2] * 10, 'c': [0.3] * 10}, 'y')
+    used = {re.search(r'stroke="([^"]+)"', p).group(1)
+            for p in re.findall(r'<polyline [^>]+>', svg)}
+    assert len(used) == 3
+
+
+def test_multi_series_log_axis_keeps_marks_in_bounds():
+    """Values spanning two decades must not overflow the viewBox."""
+    svg = multi_series_svg(list(range(30)),
+                           {'a': list(np.geomspace(0.02, 1.5, 30))}, 'y',
+                           threshold=0.10, logy=True)
+    assert check_svg_bounds(svg) == []
+
+
+def test_multi_series_log_axis_labels_are_values_not_exponents():
+    svg = multi_series_svg(list(range(20)),
+                           {'a': list(np.geomspace(0.05, 1.0, 20))}, 'y', logy=True)
+    assert '-1.00' not in svg          # would be log10 leaking into the label
+
+
+def test_multi_series_handles_a_flat_series():
+    svg = multi_series_svg(list(range(12)), {'a': [0.25] * 12}, 'y', threshold=0.10)
+    assert check_svg_bounds(svg) == []
+
+
+def test_multi_series_rejects_entirely_empty_input():
+    with pytest.raises(ValueError, match='every series is empty'):
+        multi_series_svg(list(range(5)), {'a': [None] * 5}, 'y')

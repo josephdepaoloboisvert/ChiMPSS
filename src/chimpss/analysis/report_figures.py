@@ -27,7 +27,8 @@ __all__ = [
     'MONO', 'SANS', 'VIRIDIS', 'viridis',
     'pairwise_hist_svg', 'series_svg', 'pool_svg', 'roundtrip_hist_svg',
     'walkers_svg', 'pc_landscape_svg', 'drift_svg',
-    'segmented_drift_svg', 'window_threshold_svg',
+    'segmented_drift_svg', 'window_threshold_svg', 'multi_series_svg',
+    'SERIES_COLORS',
 ]
 
 MONO = 'IBM Plex Mono, monospace'
@@ -606,5 +607,108 @@ def window_threshold_svg(widths, needed, current=0.10, noise_floor=None):
     out.append(f'<text x="14" y="{(T+H-B)/2:.0f}" fill="var(--ink-2)" font-family="{SANS}" '
                f'font-size="12" text-anchor="middle" '
                f'transform="rotate(-90 14 {(T+H-B)/2:.0f})">JSD threshold required</text>')
+    out.append('</svg>')
+    return '\n      '.join(out)
+
+
+#: Distinguishable series colours that survive both themes.
+SERIES_COLORS = ['var(--accent)', 'var(--burnt)', '#d8a13a', '#6a8f4f', '#8a6fa8']
+
+
+def multi_series_svg(x, series, ylab, xlab='block', threshold=None,
+                     threshold_label=None, band=None, band_label=None,
+                     H=340, logy=False, aria='', colors=None):
+    """Several series against a common x axis, with an optional threshold line.
+
+    Built for the convergence criterion, where the quantity of interest is one
+    number per block per policy -- the worst comparison inside that policy's
+    window -- and the question is when, if ever, it drops below a threshold.
+    A distribution over all pairs cannot answer that; only the time course can.
+
+    ``series`` maps label to a sequence the same length as ``x``.  Values may
+    be ``None`` where a policy has no answer for that block (too few preceding
+    blocks), and the line breaks there rather than interpolating across it.
+    """
+    W, L, R, T, B = 720, 64, 150, 22, 46
+    x = np.asarray(x, dtype=float)
+    colors = colors or SERIES_COLORS
+
+    allv = [v for ys in series.values() for v in ys if v is not None]
+    if not allv:
+        raise ValueError('every series is empty')
+    lo, hi = min(allv), max(allv)
+    if threshold is not None:
+        lo, hi = min(lo, threshold), max(hi, threshold)
+    if logy:
+        lo = max(lo, 1e-4)
+        f = lambda v: np.log10(max(v, 1e-4))
+    else:
+        lo = min(lo, 0.0)
+        f = lambda v: v
+    flo, fhi = f(lo), f(hi)
+    pad = (fhi - flo) * 0.08 or 1.0
+    flo, fhi = flo - pad, fhi + pad
+    sx = lambda v: L + (v - x.min()) / (x.max() - x.min()) * (W - L - R)
+    sy = lambda v: H - B - (f(v) - flo) / (fhi - flo) * (H - T - B)
+
+    out = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="{aria or ylab}">']
+    if band is not None:
+        out.append(f'<rect x="{L}" y="{sy(band):.1f}" width="{W-L-R}" '
+                   f'height="{H-B-sy(band):.1f}" fill="var(--accent-soft)" '
+                   f'fill-opacity="0.65"></rect>')
+    ticks = np.linspace(flo, fhi, 5)
+    out.append('<g stroke="var(--rule-soft)" stroke-width="1">')
+    for t in ticks:
+        yy = H - B - (t - flo) / (fhi - flo) * (H - T - B)
+        out.append(f'<line x1="{L}" y1="{yy:.1f}" x2="{W-R}" y2="{yy:.1f}"></line>')
+    out.append('</g>')
+
+    if threshold is not None:
+        out.append(f'<line x1="{L}" y1="{sy(threshold):.1f}" x2="{W-R}" '
+                   f'y2="{sy(threshold):.1f}" stroke="var(--ink)" stroke-width="1.3" '
+                   f'stroke-dasharray="5 3"></line>')
+        if threshold_label:
+            out.append(f'<text x="{L+6}" y="{sy(threshold)-6:.1f}" fill="var(--ink)" '
+                       f'font-family="{MONO}" font-size="10.5">{threshold_label}</text>')
+    if band is not None and band_label:
+        out.append(f'<text x="{L+6}" y="{sy(band)+13:.1f}" fill="var(--accent)" '
+                   f'font-family="{MONO}" font-size="10">{band_label}</text>')
+
+    for i, (lab, ys) in enumerate(series.items()):
+        col = colors[i % len(colors)]
+        run = []
+        for xi, v in zip(x, ys):
+            if v is None:
+                if len(run) > 1:
+                    out.append(f'<polyline points="{" ".join(run)}" fill="none" '
+                               f'stroke="{col}" stroke-width="1.5" stroke-opacity="0.9"></polyline>')
+                run = []
+            else:
+                run.append(f'{sx(xi):.1f},{sy(v):.1f}')
+        if len(run) > 1:
+            out.append(f'<polyline points="{" ".join(run)}" fill="none" stroke="{col}" '
+                       f'stroke-width="1.5" stroke-opacity="0.9"></polyline>')
+
+    out.append(f'<g fill="var(--muted)" font-family="{MONO}" font-size="11">')
+    for v in range(0, int(x.max()) + 1, 20):
+        out.append(f'<text x="{sx(v):.1f}" y="{H-B+16}" text-anchor="middle">{v}</text>')
+    for t in ticks:
+        yy = H - B - (t - flo) / (fhi - flo) * (H - T - B)
+        val = (10 ** t) if logy else t
+        out.append(f'<text x="{L-8}" y="{yy+4:.1f}" text-anchor="end">{val:.2f}</text>')
+    out.append('</g>')
+    out.append(f'<text x="{(L+W-R)/2:.0f}" y="{H-5}" fill="var(--ink-2)" '
+               f'font-family="{SANS}" font-size="12" text-anchor="middle">{xlab}</text>')
+    out.append(f'<text x="14" y="{(T+H-B)/2:.0f}" fill="var(--ink-2)" font-family="{SANS}" '
+               f'font-size="12" text-anchor="middle" '
+               f'transform="rotate(-90 14 {(T+H-B)/2:.0f})">{ylab}</text>')
+
+    for i, lab in enumerate(series):
+        y = T + 16 + i * 19
+        col = colors[i % len(colors)]
+        out.append(f'<line x1="{W-R+10}" y1="{y-4}" x2="{W-R+26}" y2="{y-4}" '
+                   f'stroke="{col}" stroke-width="2.4"></line>')
+        out.append(f'<text x="{W-R+31}" y="{y}" fill="var(--ink-2)" '
+                   f'font-family="{SANS}" font-size="11">{lab}</text>')
     out.append('</svg>')
     return '\n      '.join(out)
