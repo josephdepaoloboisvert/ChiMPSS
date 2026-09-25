@@ -53,6 +53,14 @@ def parse_args():
     p.add_argument('--pdb_code', default=None,
                    help='Parent crystal structure code, required with --pangpcr_prefix.')
     p.add_argument('--stor_dir', default='./many_structures/')
+    p.add_argument('--pc_timeseries', type=int, default=3,
+                   help='Leading components of the external basis to track per block. '
+                        'PC1 is usually the activation coordinate, but motion confined '
+                        'to PC1 and motion spread over several components are different '
+                        'physical statements. Three by default because on '
+                        'NTSR1_ML-301.hmr.rep0 the residual drift late in the run sits '
+                        'on PC3, not PC1: tracking only the leading component would have '
+                        'reported the ensemble as settled while it was still moving.')
     p.add_argument('--collapse_at', type=int, default=10,
                    help='Distinct-frame count at or below which a resample counts as collapsed.')
     return p.parse_args()
@@ -281,22 +289,52 @@ def main():
             train, states, evr = load_training_projections(args.pangpcr_prefix)
             blk = np.array(info['blocks']); ub = np.unique(blk)
             means = np.stack([ext[blk == k].mean(axis=0) for k in ub])
-            cent = {s: float(train[[x == s for x in states], 0].mean())
-                    for s in set(states)}
+            n_pcs = max(1, min(args.pc_timeseries, means.shape[1]))
             from scipy import stats as _st
-            sl, ic, r, p, _ = _st.linregress(ub, means[:, 0])
+
+            # Centroids are per-component: the activation separation lives on
+            # PC1, but a later component may separate something else, and a
+            # trend there is only interpretable against its own reference
+            # levels.
+            cent = {c: {s: float(train[[x == s for x in states], c].mean())
+                        for s in set(states)} for c in range(n_pcs)}
+            comps = {}
+            for c in range(n_pcs):
+                sl, ic, r, p, _ = _st.linregress(ub, means[:, c])
+                seg_svg, seg = rf.segmented_drift_svg(
+                    ub, means[:, c], cent[c], ylab=f'mean PC{c+1}')
+                comps[f'pc{c+1}'] = {
+                    'by_block': means[:, c].tolist(),
+                    'explained_variance': float(evr[c]),
+                    'trajectory_sd': float(means[:, c].std()),
+                    'training_sd': float(train[:, c].std()),
+                    'fit': {'slope': float(sl), 'intercept': float(ic),
+                            'r': float(r), 'p': float(p)},
+                    'segmented': seg,
+                }
+                emit(f'pc{c+1}_drift', seg_svg)
+                print(f'  pan-GPCR: PC{c+1} drift {sl:+.4f}/block, r={r:+.3f}, '
+                      f'p={p:.2e}   (segmented: {seg["before"]["slope"]:+.4f} -> '
+                      f'{seg["after"]["slope"]:+.4f} at block {seg["changepoint"]:.0f})')
+
             B['pangpcr'] = {'mapping': {k: v for k, v in info.items()
                                         if k in ('identity', 'n_aligned', 'n_traj',
                                                  'offsets', 'n_resolved', 'n_positions')},
-                            'centroids': cent, 'n_train': int(train.shape[0]),
+                            'centroids': cent[0], 'centroids_by_pc': cent,
+                            'n_train': int(train.shape[0]),
+                            'blocks': ub.tolist(), 'components': comps,
+                            # kept for callers written against the single-component form
                             'pc1_by_block': means[:, 0].tolist(),
-                            'blocks': ub.tolist(),
-                            'fit': {'slope': float(sl), 'intercept': float(ic),
-                                    'r': float(r), 'p': float(p)}}
-            print(f'  pan-GPCR: PC1 drift {sl:+.4f}/block, r={r:.3f}, p={p:.2e}')
+                            'fit': comps['pc1']['fit']}
+
             emit('pc_landscape', rf.pc_landscape_svg(train, states, means, ub, ext, evr))
-            emit('pc1_drift', rf.drift_svg(ub, means[:, 0], cent,
-                                           {'slope': sl, 'intercept': ic}))
+            emit('pc_components', rf.multi_series_svg(
+                ub, {f'PC{c+1}  ({evr[c]:.1%} var)': means[:, c].tolist()
+                     for c in range(n_pcs)},
+                'mean projection per block',
+                aria='Mean projection of each block onto the leading components of the '
+                     'external basis. A component with no trend is one along which the '
+                     'ensemble is not moving.'))
         except Exception as exc:
             print(f'  pan-GPCR projection skipped: {type(exc).__name__}: {exc}')
 

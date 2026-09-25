@@ -203,3 +203,37 @@ def test_argparse_rejects_a_nonnumeric_dt(monkeypatch):
                         ['chimpss-motorrow'] + BASE + ['--dt', 'fast'])
     with pytest.raises(SystemExit):
         motorrow.parse_args()
+
+
+# ── convergence bundle: principal-component timeseries ────────────────────────
+
+def test_convergence_bundle_tracks_several_components_by_default():
+    """Tracking only PC1 can report a settled ensemble that is still moving.
+
+    On NTSR1_ML-301.hmr.rep0 the activation coordinate flattens late in the run
+    while a lower-variance component keeps drifting, so the default must be
+    greater than one.
+    """
+    from chimpss.cli.convergence_bundle import parse_args
+    import sys
+
+    argv = sys.argv
+    try:
+        sys.argv = ['chimpss-convergence-bundle', 'run_dir']
+        args = parse_args()
+    finally:
+        sys.argv = argv
+    assert args.pc_timeseries >= 2
+
+
+def test_convergence_bundle_component_count_is_configurable():
+    from chimpss.cli.convergence_bundle import parse_args
+    import sys
+
+    argv = sys.argv
+    try:
+        sys.argv = ['chimpss-convergence-bundle', 'run_dir', '--pc_timeseries', '5']
+        args = parse_args()
+    finally:
+        sys.argv = argv
+    assert args.pc_timeseries == 5
