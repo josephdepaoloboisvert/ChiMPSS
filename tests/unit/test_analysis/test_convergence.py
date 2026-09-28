@@ -408,3 +408,31 @@ def test_pairwise_cache_overwrite_forces_a_rebuild(tmp_path):
     PairwiseCache.build(run, overwrite=True,
                         _printf=lambda *a, **k: msgs.append(a[0]))
     assert any('carry all' in m for m in msgs)
+
+
+# ---------------------------------------------------------------------------
+# replay -- disjoint source pools
+# ---------------------------------------------------------------------------
+
+def test_replay_disjoint_only_skips_overlapping_pools():
+    """Adjacent blocks agree (they share their pool); a pool-disjoint block
+    disagrees.  With disjoint_only the disagreement is what gets compared."""
+    N = 40
+    cache = make_cache(N)
+    for b in range(1, N):
+        for a in range(0, b - 5):
+            for m in cv.METRICS:
+                cache.jsd[m][a, b] = cache.jsd[m][b, a] = 0.25
+    bounds = {b: (b * 9 - 45 if b >= 5 else 0, b * 9, 300) for b in range(N)}
+    plain = cv.replay(cache, window_blocks=3, require_gate=False, total_n_sims=N)
+    disjoint = cv.replay(cache, window_blocks=30, require_gate=False, total_n_sims=N,
+                         pool_bounds=bounds, disjoint_only=True)
+    assert 39 in plain.passing
+    assert 39 not in disjoint.passing
+
+
+def test_replay_disjoint_only_without_bounds_compares_nothing():
+    cache = make_cache(40)
+    r = cv.replay(cache, window_blocks=3, require_gate=False, total_n_sims=40,
+                  disjoint_only=True)
+    assert r.passing == []

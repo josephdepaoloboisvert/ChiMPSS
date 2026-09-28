@@ -270,6 +270,27 @@ def main():
         emit('walkers_at_state0', rf.walkers_svg(
             B['mixing']['blocks'], B['mixing']['walkers_at_state0'], collapsed))
 
+    # --- MBAR source-pool overlap --------------------------------------------
+    # The JSD between two resamples is a monotone function of how much source
+    # data they share (NTSR1 rep0: median 0.02-0.05 at >90 % overlap, 0.17-0.24
+    # at none).  Report the overlap so a trailing-window pass can be read for
+    # what it is.
+    try:
+        from chimpss.analysis.convergence_panel import pool_bounds, pool_overlap
+        bounds = pool_bounds(run)
+        bl = sorted(bounds)
+        if len(bl) > 2:
+            ov = [pool_overlap(bounds, x, y) for x, y in zip(bl[:-1], bl[1:])]
+            B['pool_overlap'] = {'adjacent_median': float(np.median(ov)),
+                                 'adjacent_p10': float(np.quantile(ov, .1)),
+                                 'per_pair': [[int(y), float(o)] for y, o in zip(bl[1:], ov)]}
+            print(f"  MBAR source pools: adjacent overlap median {np.median(ov):.2f} "
+                  f"(p10 {np.quantile(ov, .1):.2f})"
+                  + ("  -- trailing-window JSD agreement is largely by construction"
+                     if np.median(ov) > 0.5 else ""))
+    except Exception as exc:                                    # pragma: no cover
+        print(f"  pool overlap unavailable: {exc}")
+
     # --- external basis ------------------------------------------------------
     if args.pangpcr_prefix and args.pdb_code and args.pdb:
         try:

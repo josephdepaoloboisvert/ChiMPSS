@@ -15,6 +15,57 @@ behaves, not the product. A report organised around "did this run converge?"
 is the wrong document — organise it around "which detector should we use, and
 what does this run demonstrate about it?"
 
+## 0a. The production criterion measures pool overlap, not convergence
+
+Established on NTSR1 rep0 at 4,025 ns (161 blocks) and true of the criterion
+as designed, not of one run. The JSD between two blocks' MBAR resamples is a
+monotone function of how much *source data* the two resamples share: median
+0.02–0.05 at >90 % overlap of their `[t0:N]` intervals (92–99 % of pairs clear
+0.10), 0.17–0.24 at zero overlap (0–28 % clear it), Spearman −0.24…−0.32, and
+no dependence on time separation among pool-disjoint pairs. Under a trailing
+max-N_eff t0, adjacent blocks share ~90 % of their pool, so trailing windows
+pass by construction and the all-history window fails by construction. Earlier
+campaigns, with an early stable t0 and nested pools, passed for the same
+reason. The 0.10 threshold sits at or below the noise floor for *independent*
+data (0.10–0.12 on interleaved halves; 0.11–0.18 between independent segments
+of any length).
+
+Consequences for a report: never present a trailing-window pass as evidence of
+convergence without the pool overlap beside it (`chimpss-convergence-bundle`
+now prints it; `replay(..., disjoint_only=True, pool_bounds=...)` gives the
+statistic on independent pairs); do not build nulls by shuffling cumulative
+resamples between halves (the null inherits the overlap and reads far too
+tight — covariance overlap 0.52 vs a 0.83 "null" that became 0.64 vs 0.70 on
+independent data); and do not use k-means populations as a convergence
+observable unless more than one basin is established (cells 1.7 Å apart on a
+1.5 Å ensemble turn a 0.2 Å shift into a "−5 kcal/mol population change").
+
+## 0b. Validation runs: use the panel
+
+```bash
+chimpss-convergence-panel <run_dir> \
+  --pdb <run_dir>/saved_variables/<block>/resampled_top.pdb \
+  --pangpcr_prefix models/pangpcr1513 --pdb_code <PARENT_PDB> \
+  --stor_dir many_structures/ --prefix_curve
+```
+
+`chimpss.analysis.convergence_panel` reads the five lowest rungs of every
+iteration (no MBAR, no skip; cached under `analysis/`), superposes the
+conserved Cα atoms on the pan-GPCR reference, discards the first quarter of
+blocks, and gates on effect sizes against experimental tolerances on the two
+contiguous halves: mean-structure RMSD vs the same-state reproducibility of
+the receptor's own structures (0.92 Å for NTSR1; family median 0.69 Å),
+state assignment per quarter plus half-shift vs within-state spread, ensemble
+width as Wasserstein-1 in Å, and basin populations (ΔG vs kT) only when a
+bimodality test finds more than one basin. Block bootstrap for intervals,
+interleaved halves for the noise floor. Below 16 equilibrated blocks it
+returns INSUFFICIENT. On rep0 it read CONVERGED from 32 blocks (800 ns) and at
+every later prefix; on the 6-block rep1, INSUFFICIENT. τ, n_eff, naive vs
+corrected p, R̂ and the Flyvbjerg–Petersen error are printed as diagnostics and
+never gate — a null-rejection test gets harder to pass as a converged run
+lengthens, so it cannot be a stopping rule. See the report "Which Metrics See
+Convergence" (28 Sep 2026) for the full audit.
+
 ## 0. What the criterion cannot see
 
 Two blind spots are structural, not bugs, and both matter for how the report

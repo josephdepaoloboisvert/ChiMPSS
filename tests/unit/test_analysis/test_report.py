@@ -376,3 +376,13 @@ def test_multi_series_handles_a_flat_series():
 def test_multi_series_rejects_entirely_empty_input():
     with pytest.raises(ValueError, match='every series is empty'):
         multi_series_svg(list(range(5)), {'a': [None] * 5}, 'y')
+
+
+def test_multi_series_ticks_stay_inside_the_viewbox_when_x_starts_late():
+    """A series beginning at block 70 must not label 0, 20, 40, 60 off-canvas."""
+    from chimpss.analysis.report_html import check_svg_bounds
+    from chimpss.analysis.report_figures import multi_series_svg
+    x = list(range(70, 161, 5))
+    svg = multi_series_svg(x, {'a': [0.1 * (i % 3) for i in range(len(x))]}, 'y')
+    assert check_svg_bounds(svg) == []
+    assert '>60</text>' not in svg and '>80</text>' in svg

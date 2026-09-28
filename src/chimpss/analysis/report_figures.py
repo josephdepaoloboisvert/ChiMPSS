@@ -690,7 +690,11 @@ def multi_series_svg(x, series, ylab, xlab='block', threshold=None,
                        f'stroke-width="1.5" stroke-opacity="0.9"></polyline>')
 
     out.append(f'<g fill="var(--muted)" font-family="{MONO}" font-size="11">')
-    for v in range(0, int(x.max()) + 1, 20):
+    # Ticks only inside the data range: a series that starts at block 40 must
+    # not draw labels for 0 and 20 at negative x, where they are clipped.
+    step = 20 if (x.max() - x.min()) > 60 else 10
+    first_tick = int(np.ceil(x.min() / step) * step)
+    for v in range(first_tick, int(x.max()) + 1, step):
         out.append(f'<text x="{sx(v):.1f}" y="{H-B+16}" text-anchor="middle">{v}</text>')
     for t in ticks:
         yy = H - B - (t - flo) / (fhi - flo) * (H - T - B)

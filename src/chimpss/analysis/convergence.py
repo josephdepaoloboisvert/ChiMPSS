@@ -206,7 +206,9 @@ def replay(cache: PairwiseCache,
            frobenius_thresh: float = 0.05,
            jsd_thresh: float = 0.10,
            exclude: Optional[Iterable[int]] = None,
-           require_gate: bool = True) -> ReplayResult:
+           require_gate: bool = True,
+           pool_bounds: Optional[Dict[int, Tuple[int, int, int]]] = None,
+           disjoint_only: bool = False) -> ReplayResult:
     """Re-evaluate the convergence criterion over the cache under one policy.
 
     Exactly one window policy applies, in precedence order:
@@ -219,6 +221,14 @@ def replay(cache: PairwiseCache,
     would report it; it is required for the production rule and for the gate.
     ``exclude`` drops blocks from the comparison entirely, which is what
     withholding their matrices would do in the live code.
+
+    ``disjoint_only`` restricts every comparison to blocks whose MBAR source
+    interval (from ``pool_bounds``, see
+    :func:`chimpss.analysis.convergence_panel.pool_bounds`) does not overlap
+    the current block's.  Adjacent resamples under a trailing t0 share ~90 %
+    of their source frames, and the JSD between two resamples is a monotone
+    function of that overlap, so without this restriction a trailing window
+    certifies the detector's t0 trajectory rather than the ensemble.
     """
     excl = set(int(x) for x in (exclude or ()))
     per_block: Dict[int, dict] = {}
@@ -250,6 +260,11 @@ def replay(cache: PairwiseCache,
             for prev in range(first_valid, sim_no):
                 if prev in excl or not cache.has(prev):
                     continue
+                if disjoint_only:
+                    if pool_bounds is None or prev not in pool_bounds or sim_no not in pool_bounds:
+                        continue
+                    if pool_bounds[prev][1] >= pool_bounds[sim_no][0]:
+                        continue
                 f, j = cache.pair(m, sim_no, prev)
                 if np.isnan(f) or np.isnan(j):
                     bad = True
