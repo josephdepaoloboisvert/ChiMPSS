@@ -15,6 +15,23 @@ behaves, not the product. A report organised around "did this run converge?"
 is the wrong document — organise it around "which detector should we use, and
 what does this run demonstrate about it?"
 
+## 0. What the criterion cannot see
+
+Two blind spots are structural, not bugs, and both matter for how the report
+argues its verdict.
+
+The pairwise statistic histograms the *upper triangle of each block's own
+distance matrix* -- the distribution of distances within one ensemble. That is
+invariant to bodily displacement: a synthetic ensemble moved 20 standard
+deviations scores exactly 0.000000, while widening its internal spread 10%
+scores 0.348. So a run sliding along a collective coordinate with constant
+internal geometry reads as converged.
+
+A linear trend test is blind to non-monotone motion for the same kind of
+reason. Each statistic is insensitive to a mode it was never designed to see.
+The report should name both explicitly and carry a measurement that covers
+them -- in practice, projection onto an external basis.
+
 ## 1. Collect the evidence
 
 ```bash
@@ -90,6 +107,29 @@ at `--null_reps 25`: the improvement was an artifact.
 recomputed number contradicts published text, fix the text. Two numbers in an
 earlier version were not reproducible from the module's own code and had to be
 corrected rather than kept.
+
+**A trend test is not a stationarity test.** Linear regression on a per-block
+mean detects *monotone* drift and nothing else. An ensemble that descends,
+reverses, plateaus and turns again passes it while moving throughout. On
+`NTSR1_ML-301.hmr.rep0` at 4,025 ns, PC1 shows no linear trend over the final
+forty blocks (p = 0.23) and a two-sample KS test on the same blocks rejects
+stationarity (p = 0.034). Run both, and report both.
+
+**Do not conclude from a short tail.** The same PC1 test at 144 blocks returned
+KS p = 0.69 on 23 blocks and was reported as provisional evidence of settling;
+39 blocks inverted it. Treat a non-significant result on a short series as
+absence of evidence, and say so rather than hedging with "provisionally".
+
+**Track several principal components, and rank them by drift, not variance.**
+Explained-variance ratio describes the *training* set, not the run: the top
+three pan-GPCR components hold 48% of training variance but only 7% of this
+trajectory's own variance. Because the basis is orthonormal, one angstrom along
+PC5 is exactly as much atomic motion as one along PC1, so variance share
+applies no discount to a displacement. What variance rank does affect is axis
+determinacy -- check the eigenvalue gap, and flag any component whose gap to
+its neighbour is under ~15%, since the subspace is then determined but the
+split within it is not. Tracking PC1 alone would have called this run settled
+while five other components were still drifting.
 
 **Say which detector gated the window replay.** Passing counts depend on it,
 heavily: a one-block window on NTSR1 rep0 passes 5 blocks under `max_neff` and
