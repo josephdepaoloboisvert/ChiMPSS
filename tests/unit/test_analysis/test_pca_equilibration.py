@@ -533,3 +533,22 @@ def test_collect_frames_reuses_a_current_projection_cache(model, tmp_path, monke
     assert out.shape == coords.shape
     assert info["blocks"] == [0, 1]
     assert not msgs
+
+
+def test_topology_sequence_can_read_every_chain():
+    """A receptor split into two chains at an unmodelled loop must not lose
+    the second half when chain_index is None."""
+    import mdtraj as md
+    top = md.Topology()
+    for chain_res in (((10, 'ALA'), (11, 'GLY'), (12, 'SER')), ((20, 'LEU'), (21, 'VAL'))):
+        ch = top.add_chain()
+        for rs, name in chain_res:
+            r = top.add_residue(name, ch, resSeq=rs)
+            top.add_atom('CA', md.element.carbon, r)
+    lig = top.add_chain()
+    r = top.add_residue('UNK', lig, resSeq=0)
+    top.add_atom('C1', md.element.carbon, r)
+    from chimpss.analysis.pca_equilibration import topology_sequence
+    assert [r for r, _ in topology_sequence(top, 0)] == [10, 11, 12]
+    assert [r for r, _ in topology_sequence(top, None)] == [10, 11, 12, 20, 21]
+    assert all(l in 'AGSLV' for _, l in topology_sequence(top, None))

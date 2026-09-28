@@ -355,10 +355,14 @@ def _interleaved(ub: np.ndarray, chunk: int, rng: np.random.Generator
     between them is finite-sample noise plus autocorrelation shorter than
     ``chunk`` -- the floor against which a contiguous-halves difference is read.
     """
+    # Chunks alternate between the two sets from a random phase, so both sets
+    # are populated whenever there are at least two chunks; a random
+    # permutation could put every chunk on one side when there are few.
+    chunk = max(1, min(int(chunk), ub.size // 2))
     chunks = [ub[i:i + chunk] for i in range(0, ub.size, chunk)]
-    lab = rng.permutation(len(chunks)) % 2
-    a = np.concatenate([c for c, l in zip(chunks, lab) if l == 0])
-    b = np.concatenate([c for c, l in zip(chunks, lab) if l == 1])
+    phase = int(rng.integers(0, 2))
+    a = np.concatenate([c for i, c in enumerate(chunks) if (i + phase) % 2 == 0])
+    b = np.concatenate([c for i, c in enumerate(chunks) if (i + phase) % 2 == 1])
     return a, b
 
 
@@ -608,7 +612,8 @@ def equilibrated_blocks(blocks: np.ndarray, b0: Optional[int] = None,
 
 def panel(X: np.ndarray, P: np.ndarray, blocks: np.ndarray, tol: Tolerances,
           b0: Optional[int] = None, width_fraction: float = 0.25,
-          train_sd: Optional[np.ndarray] = None, seed: int = 0) -> dict:
+          train_sd: Optional[np.ndarray] = None, seed: int = 0,
+          min_blocks: int = 2 * MIN_BLOCKS_PER_HALF) -> dict:
     """Evaluate every gate on the equilibrated blocks and return one verdict.
 
     ``X`` superposed conserved-atom coordinates (n_frames, n_atoms, 3) in A;
@@ -626,10 +631,10 @@ def panel(X: np.ndarray, P: np.ndarray, blocks: np.ndarray, tol: Tolerances,
                                diff_state_rmsd=tol.diff_state_rmsd,
                                receptor=tol.receptor, receptor_n=tol.receptor_n_structures,
                                width_rmsd=width_fraction * tol.same_state_rmsd))
-    if ub.size < 2 * MIN_BLOCKS_PER_HALF:
+    if ub.size < min_blocks:
         res['verdict'] = 'INSUFFICIENT'
         res['reason'] = (f'{ub.size} equilibrated blocks; the panel needs at least '
-                         f'{2 * MIN_BLOCKS_PER_HALF} ({MIN_BLOCKS_PER_HALF} per half)')
+                         f'{min_blocks} ({min_blocks // 2} per half)')
         return res
 
     eq = np.isin(blocks, ub)
@@ -714,3 +719,409 @@ def format_panel(r: dict) -> str:
         lines.append(f"  {k:>4} {d['tau']:>5.1f} {d['neff']:>5.0f} {d['p_naive']:>8.1e} {d['p_corr']:>7.3f} "
                      f"{d['rhat']:>5.2f} {d['total_drift']:>+6.2f} {d['fp_se']:>6.3f}")
     return '\n'.join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Live use inside the PTRE block loop
+# ---------------------------------------------------------------------------
+
+STOP_MODES = ('jsd', 'panel', 'both', 'either')
+
+
+def combine_stop(mode: str, jsd_stop: Optional[bool], panel_stop: Optional[bool],
+                 at_max_time: bool = False) -> bool:
+    """One stop decision from the two criteria.
+
+    ``jsd`` keeps the published behaviour.  ``panel`` hands the decision to the
+    panel while the JSD machinery still runs every block for its resampled
+    artifacts and prints its own report, so nothing the campaign already
+    produces is lost.  ``both`` requires agreement; ``either`` stops on the
+    first.  The aggregate-time ceiling ends the run in every mode.  A criterion
+    that was not evaluated (``None``) counts as not stopping.
+    """
+    if mode not in STOP_MODES:
+        raise ValueError(f'unknown convergence mode {mode!r}; choose from {STOP_MODES}')
+    if at_max_time:
+        return True
+    j, p = bool(jsd_stop), bool(panel_stop)
+    return {'jsd': j, 'panel': p, 'both': j and p, 'either': j or p}[mode]
+
+
+def _tol_to_dict(tol: Tolerances) -> dict:
+    return dict(same_state_rmsd=tol.same_state_rmsd,
+                family_same_state_rmsd=tol.family_same_state_rmsd,
+                diff_state_rmsd=tol.diff_state_rmsd,
+                centroids={k: np.asarray(v, float).tolist() for k, v in tol.centroids.items()},
+                within_state_sd={k: np.asarray(v, float).tolist() for k, v in tol.within_state_sd.items()},
+                receptor=tol.receptor, receptor_n_structures=tol.receptor_n_structures,
+                receptor_groups=tol.receptor_groups, state_counts=tol.state_counts)
+
+
+def _tol_from_dict(d: dict) -> Tolerances:
+    return Tolerances(same_state_rmsd=d['same_state_rmsd'],
+                      family_same_state_rmsd=d['family_same_state_rmsd'],
+                      diff_state_rmsd=d['diff_state_rmsd'],
+                      centroids={k: np.asarray(v, float) for k, v in d['centroids'].items()},
+                      within_state_sd={k: np.asarray(v, float) for k, v in d['within_state_sd'].items()},
+                      receptor=d.get('receptor'), receptor_n_structures=d.get('receptor_n_structures', 0),
+                      receptor_groups=d.get('receptor_groups', []), state_counts=d.get('state_counts', {}))
+
+
+class LivePanel:
+    """The panel as a stopping rule, evaluated after every completed block.
+
+    Runs inside :meth:`FultonMarket.run` on rank 0.  Each block's conserved
+    atoms for the lowest rungs are read once from the block's ``positions.npy``
+    and kept under ``<run_dir>/analysis/live_panel/``, so an evaluation costs a
+    few seconds regardless of run length and a resubmitted job resumes from the
+    cache.  The verdict must hold for ``consecutive`` blocks before the run
+    stops: a single pass at the bootstrap bound can flicker, and a stopping
+    rule should not act on one.
+
+    Everything the loop needs that could require the network -- GPCRdb
+    numbering, tolerances from the training set -- is resolved once by
+    :meth:`prepare` and written to ``live_panel_config.json``; run it from a
+    login node before submitting (``chimpss-convergence-panel --prepare``).
+    """
+    CONFIG = 'live_panel_config.json'
+    STATE = 'live_panel_state.json'
+    FRAMES = 'live_panel'
+
+    def __init__(self, run_dir: str, topology: str, model_prefix: str,
+                 pdb_code: Optional[str] = None, receptor: Optional[str] = None,
+                 stor_dir: str = './many_structures/', n_states: int = 5, skip: int = 0,
+                 b0_fraction: float = 0.25, width_fraction: float = 0.25,
+                 consecutive: int = 3, min_blocks: int = 2 * MIN_BLOCKS_PER_HALF,
+                 n_pc: int = 10, chain_index: Optional[int] = None,
+                 model: Optional[PanGPCRModel] = None,
+                 atom_indices: Optional[Sequence[int]] = None,
+                 tolerances: Optional[Tolerances] = None,
+                 n_atoms_total: Optional[int] = None,
+                 printf: Callable = print):
+        self.run_dir = run_dir
+        self.topology = topology
+        self.model_prefix = model_prefix
+        self.pdb_code = pdb_code
+        self.receptor = receptor
+        self.stor_dir = stor_dir
+        self.n_states = int(n_states)
+        self.skip = int(skip)
+        self.b0_fraction = float(b0_fraction)
+        self.width_fraction = float(width_fraction)
+        self.consecutive = int(consecutive)
+        self.min_blocks = int(min_blocks)
+        self.n_pc = int(n_pc)
+        self.chain_index = None if chain_index is None else int(chain_index)
+        self.printf = printf
+        self._model = model
+        self._atom_indices = None if atom_indices is None else np.asarray(atom_indices, np.int64)
+        self._tol = tolerances
+        self._n_atoms_total = n_atoms_total
+        self._train_sd = None
+        self.mapping: dict = {}
+        self.analysis_dir = os.path.join(run_dir, 'analysis')
+        self.frames_dir = os.path.join(self.analysis_dir, self.FRAMES)
+
+    # -- lazy resources -------------------------------------------------------
+
+    @property
+    def model(self) -> PanGPCRModel:
+        if self._model is None:
+            from chimpss.analysis.pca_equilibration import load_model
+            self._model = load_model(self.model_prefix)
+        return self._model
+
+    @property
+    def train_sd(self) -> Optional[np.ndarray]:
+        if self._train_sd is None:
+            p = f'{self.model_prefix}_train_projections.npy'
+            if os.path.exists(p):
+                self._train_sd = np.load(p)[:, :self.n_pc].std(0)
+        return self._train_sd
+
+    # -- preparation ----------------------------------------------------------
+
+    def prepare(self) -> dict:
+        """Resolve atoms and tolerances, write the config, return it.
+
+        Raises if any conserved position cannot be found in the topology: a
+        construct missing conserved atoms cannot be projected on this basis,
+        and that must surface before the first block is paid for, not after.
+        """
+        os.makedirs(self.frames_dir, exist_ok=True)
+        cfg_path = os.path.join(self.analysis_dir, self.CONFIG)
+        if self._atom_indices is None and os.path.exists(cfg_path):
+            with open(cfg_path) as fh:
+                cfg = json.load(fh)
+            self.apply_config(cfg)
+            self.printf(f'convergence panel: loaded {cfg_path}')
+            return cfg
+
+        if self._atom_indices is None:
+            import mdtraj as md
+            from chimpss.analysis.gpcr_pca import fetch_naming_info
+            if not self.pdb_code:
+                raise ValueError('a parent pdb_code is required to number the topology '
+                                 'against GPCRdb')
+            naming, _ = fetch_naming_info(self.pdb_code, self.stor_dir)
+            top_traj = md.load(self.topology)
+            idx, missing, stats = resolve_atoms(top_traj.topology, naming, self.model,
+                                                chain_index=self.chain_index)
+            if missing:
+                lines = '; '.join(f'{lbl}: {why}' for lbl, _, why in missing[:6])
+                raise RuntimeError(
+                    f'{len(missing)} of {len(self.model.conserved_bw)} conserved positions '
+                    f'cannot be resolved in {self.topology} ({lines}{" ..." if len(missing) > 6 else ""}). '
+                    f'Build a basis without them (chimpss-generate-pca --bw_exclude) or '
+                    f'run this construct with --convergence jsd.')
+            self._atom_indices = idx
+            self._n_atoms_total = int(top_traj.n_atoms)
+            self.mapping = {k: stats[k] for k in ('identity', 'n_aligned', 'n_positions',
+                                                   'n_resolved', 'offsets') if k in stats}
+        if self._tol is None:
+            receptor = self.receptor
+            if receptor is None and self.pdb_code:
+                receptor = self.model.meta.get('structure_meta', {}).get(
+                    self.pdb_code.upper(), {}).get('protein')
+            if receptor is None and self.pdb_code:
+                # the parent need not be in the training set (8DZR, 6ZA8 are
+                # not); the GPCRdb record fetch_naming_info cached still names
+                # the receptor
+                from chimpss.analysis.gpcr_pca import Structure_Analyzer
+                sa = Structure_Analyzer(self.pdb_code.upper(), stor_dir=self.stor_dir)
+                if sa.load_cache():
+                    receptor = sa.meta.get('structure', {}).get('protein')
+            self._tol = experimental_tolerances(self.model_prefix, receptor=receptor, n_pc=self.n_pc)
+            self.receptor = receptor
+        cfg = dict(atom_indices=self._atom_indices.tolist(), n_atoms_total=self._n_atoms_total,
+                   mapping=self.mapping, tolerances=_tol_to_dict(self._tol), receptor=self.receptor,
+                   pdb_code=self.pdb_code, model_prefix=self.model_prefix, topology=self.topology,
+                   n_states=self.n_states, skip=self.skip, b0_fraction=self.b0_fraction,
+                   width_fraction=self.width_fraction, consecutive=self.consecutive,
+                   min_blocks=self.min_blocks, n_pc=self.n_pc)
+        with open(cfg_path, 'w') as fh:
+            json.dump(cfg, fh, indent=1)
+        self.printf(f'convergence panel: {len(self._atom_indices)} conserved atoms resolved'
+                    + (f" (identity {self.mapping.get('identity', float('nan')):.3f})" if self.mapping else '')
+                    + f'; same-state tolerance {self._tol.same_state_rmsd:.2f} A'
+                    + (f' ({self.receptor}, n={self._tol.receptor_n_structures})'
+                       if self._tol.receptor_n_structures else ' (family median)')
+                    + f'; config -> {cfg_path}')
+        return cfg
+
+    def apply_config(self, cfg: dict) -> None:
+        """Adopt a config produced by :meth:`prepare`, e.g. one broadcast to other ranks."""
+        self._atom_indices = np.asarray(cfg['atom_indices'], np.int64)
+        self._n_atoms_total = cfg.get('n_atoms_total')
+        self.mapping = cfg.get('mapping', {})
+        self._tol = _tol_from_dict(cfg['tolerances'])
+        self.receptor = cfg.get('receptor', self.receptor)
+        for k in ('n_states', 'skip', 'b0_fraction', 'width_fraction', 'consecutive',
+                  'min_blocks', 'n_pc'):
+            if k in cfg:
+                setattr(self, k, type(getattr(self, k))(cfg[k]))
+        os.makedirs(self.frames_dir, exist_ok=True)
+
+    @property
+    def tolerances(self) -> Tolerances:
+        if self._tol is None:
+            raise RuntimeError('LivePanel.prepare() has not been run')
+        return self._tol
+
+    # -- frames ---------------------------------------------------------------
+
+    def _block_path(self, block: int) -> str:
+        return os.path.join(self.frames_dir, f'{int(block):04d}.npz')
+
+    def ingest(self, block: int) -> bool:
+        """Read one block's conserved atoms for the lowest rungs; False if cached."""
+        path = self._block_path(block)
+        if os.path.exists(path):
+            return False
+        if self._atom_indices is None:
+            raise RuntimeError('LivePanel.prepare() has not been run')
+        d = os.path.join(self.run_dir, 'saved_variables', str(int(block)))
+        spath, ppath, tpath = (os.path.join(d, f) for f in ('states.npy', 'positions.npy',
+                                                             'temperatures.npy'))
+        st = np.load(spath)
+        n_rep = int(np.load(tpath, allow_pickle=True).size) if os.path.exists(tpath) else st.shape[1]
+        n_atoms = self._n_atoms_total
+        if n_atoms is None:
+            # raw float32 buffer: the shape lives only in the sibling arrays
+            n_atoms = os.path.getsize(ppath) // (st.shape[0] * n_rep * 3 * 4)
+        pos = _load_positions(ppath, st.shape[0], n_rep, int(n_atoms))
+        if pos is None:
+            self.printf(f'convergence panel: block {block} positions unreadable, skipped')
+            return False
+        frames, states = [], []
+        for it in range(self.skip, min(st.shape[0], pos.shape[0])):
+            for s in range(self.n_states):
+                hit = np.where(st[it] == s)[0]
+                if hit.size:
+                    frames.append(np.asarray(pos[it, hit[0]][self._atom_indices], np.float32))
+                    states.append(s)
+        del pos
+        coords = (np.stack(frames) if frames
+                  else np.empty((0, self._atom_indices.size, 3), np.float32))
+        os.makedirs(self.frames_dir, exist_ok=True)
+        tmp = path + '.tmp.npz'
+        np.savez(tmp, coords=coords, states=np.asarray(states, np.int8))
+        os.replace(tmp, path)
+        return True
+
+    def _blocks_on_disk(self) -> List[int]:
+        sv = os.path.join(self.run_dir, 'saved_variables')
+        if not os.path.isdir(sv):
+            return []
+        out = []
+        for name in os.listdir(sv):
+            if name.isdigit() and all(os.path.exists(os.path.join(sv, name, f))
+                                      for f in ('positions.npy', 'states.npy')):
+                out.append(int(name))
+        return sorted(out)
+
+    def ingest_all(self) -> List[int]:
+        """Ingest every complete block not yet cached (a resubmitted job catches up here)."""
+        return [b for b in self._blocks_on_disk() if self.ingest(b)]
+
+    def cached_blocks(self) -> List[int]:
+        if not os.path.isdir(self.frames_dir):
+            return []
+        return sorted(int(f[:-4]) for f in os.listdir(self.frames_dir)
+                      if f.endswith('.npz') and f[:-4].isdigit())
+
+    def load_frames(self, max_block: Optional[int] = None
+                    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Every cached block, or only those up to ``max_block`` (replays)."""
+        coords, blocks, states = [], [], []
+        for b in self.cached_blocks():
+            if max_block is not None and b > max_block:
+                continue
+            d = np.load(self._block_path(b))
+            c = d['coords']
+            if c.shape[0] == 0:
+                continue
+            coords.append(c)
+            blocks.append(np.full(c.shape[0], b, np.int64))
+            states.append(d['states'].astype(np.int64))
+        if not coords:
+            n = 0 if self._atom_indices is None else self._atom_indices.size
+            return (np.empty((0, n, 3), np.float32), np.empty(0, np.int64), np.empty(0, np.int64))
+        return np.concatenate(coords), np.concatenate(blocks), np.concatenate(states)
+
+    # -- evaluation -----------------------------------------------------------
+
+    def _state_path(self) -> str:
+        return os.path.join(self.analysis_dir, self.STATE)
+
+    def _load_state(self) -> dict:
+        p = self._state_path()
+        if os.path.exists(p):
+            try:
+                with open(p) as fh:
+                    return json.load(fh)
+            except Exception as exc:                            # pragma: no cover
+                self.printf(f'convergence panel: could not read {p} ({exc}); starting afresh')
+        return {'history': []}
+
+    def evaluate(self, sim_no: Optional[int] = None, past_minimum: bool = True,
+                 max_block: Optional[int] = None) -> dict:
+        """Run the panel on every cached block and update the consecutive-pass streak.
+
+        Re-evaluating the same ``sim_no`` replaces that block's entry rather
+        than extending the streak, so a restarted evaluation cannot stop a run
+        that a single pass would not have.  ``max_block`` restricts the frames
+        to blocks up to that index, which replays the rule as it would have
+        read partway through a finished run.
+        """
+        coords, blocks, _ = self.load_frames(max_block=max_block)
+        tol = self.tolerances
+        if sim_no is None:
+            sim_no = int(blocks.max()) if blocks.size else -1
+        if coords.shape[0] == 0:
+            r = dict(verdict='INSUFFICIENT', reason='no frames cached',
+                     n_blocks_total=0, n_blocks_equilibrated=0, b0=None, n_frames=0,
+                     tolerances=dict(same_state_rmsd=tol.same_state_rmsd))
+        else:
+            X = superpose_frames(coords, self.model)
+            P = project_superposed(X, self.model, n_pc=self.n_pc)
+            ub = np.unique(blocks)
+            b0 = int(ub[int(np.floor(self.b0_fraction * ub.size))])
+            r = panel(X, P, blocks, tol, b0=b0, width_fraction=self.width_fraction,
+                      train_sd=self.train_sd, min_blocks=self.min_blocks)
+
+        converged = r['verdict'] == 'CONVERGED'
+        state = self._load_state()
+        hist = [h for h in state.get('history', []) if h.get('block') != int(sim_no)]
+        g = r.get('gates', {})
+        entry = dict(block=int(sim_no), verdict=r['verdict'], n_blocks=r['n_blocks_total'],
+                     b0=r['b0'], past_minimum=bool(past_minimum),
+                     mean_rmsd=g.get('mean_structure', {}).get('rmsd'),
+                     mean_rmsd_q95=g.get('mean_structure', {}).get('boot_q95'),
+                     tolerance=tol.same_state_rmsd,
+                     state=g.get('state', {}).get('state'),
+                     same_state=g.get('state', {}).get('same_state'),
+                     pc1_shift=(g.get('state', {}).get('half_shift') or [None])[0],
+                     pc1_tolerance=(g.get('state', {}).get('tolerance') or [None])[0],
+                     w1=g.get('width', {}).get('w1'),
+                     w1_tolerance=g.get('width', {}).get('tolerance'),
+                     n_basins=g.get('basins', {}).get('n_basins'),
+                     failed=r.get('failed', []))
+        hist.append(entry)
+        hist.sort(key=lambda h: h['block'])
+        streak = 0
+        for h in reversed(hist):
+            if h['verdict'] == 'CONVERGED':
+                streak += 1
+            else:
+                break
+        entry['streak'] = streak
+        entry['stop'] = bool(past_minimum and converged and streak >= self.consecutive)
+        state = {'history': hist, 'streak': streak, 'consecutive': self.consecutive}
+        os.makedirs(self.analysis_dir, exist_ok=True)
+        with open(self._state_path(), 'w') as fh:
+            json.dump(state, fh, indent=1)
+        with open(os.path.join(self.frames_dir, f'eval_{int(sim_no):04d}.json'), 'w') as fh:
+            json.dump(r, fh, indent=1, default=float)
+        return dict(entry, full=r)
+
+    def report(self, e: dict) -> None:
+        """Print the verdict in the house ``[PASS]/[FAIL]`` style."""
+        r = e['full']
+        pf = lambda ok: 'PASS' if ok else 'FAIL'
+        width = 60
+        self.printf('=' * (width + 12))
+        self.printf(f"  {'Convergence Panel (block ' + str(e['block']) + ')':^{width}}")
+        self.printf('=' * (width + 12))
+        self.printf(f"  [{pf(e['past_minimum'])}]  Past minimum simulation fraction")
+        if r['verdict'] == 'INSUFFICIENT':
+            self.printf(f"  [FAIL]  {r.get('reason', 'insufficient data')}")
+        else:
+            g = r['gates']
+            ms, ss, ew, bc, pp = (g['mean_structure'], g['state'], g['width'],
+                                  g['basins'], g['populations'])
+            self.printf(f"  [{pf(ms['pass_'])}]  Mean-structure drift {ms['rmsd']:.3f} A "
+                        f"(bootstrap q95 {ms['boot_q95']:.3f}) <= {ms['tolerance']:.2f} A "
+                        f"[interleaved floor {ms['null_p95']:.3f}]")
+            self.printf(f"  [{pf(ss['pass_'])}]  State stability: quarters "
+                        f"{'/'.join(a[:3] for a in ss['quarter_assign'])}; PC1 shift "
+                        f"{ss['half_shift'][0]:+.2f} A (tol {ss['tolerance'][0]:.2f}), PC2 "
+                        f"{ss['half_shift'][1]:+.2f} A (tol {ss['tolerance'][1]:.2f})")
+            self.printf(f"  [{pf(ew['pass_'])}]  Ensemble width W1 {ew['w1']:.3f} A <= "
+                        f"{ew['tolerance']:.3f} A [floor {ew['null_w1_p95']:.3f}]")
+            pops = ('not applicable' if pp.get('not_applicable') else ', '.join(
+                f"basin {b['basin']} dG {b['dG']:+.2f}" for b in pp['basins']))
+            self.printf(f"  [{pf(pp['pass_'])}]  Basin populations: {bc['n_basins']} basin(s); {pops}")
+        self.printf(f"  [{pf(e['streak'] >= self.consecutive)}]  Held for {e['streak']} of "
+                    f"{self.consecutive} consecutive blocks")
+        self.printf('-' * (width + 12))
+        self.printf(f"  verdict: {r['verdict']}"
+                    + (f"  (failed: {', '.join(e['failed'])})" if e.get('failed') else '')
+                    + f"  ->  {'STOP' if e['stop'] else 'continue'}")
+        if 'diagnostics' in r:
+            d = r['diagnostics']
+            top = list(d.items())[:3]
+            self.printf('  diagnostics: ' + '; '.join(
+                f"{k} tau {v['tau']:.1f} n_eff {v['neff']:.0f} p_corr {v['p_corr']:.3f} "
+                f"R-hat {v['rhat']:.2f}" for k, v in top))
+        self.printf('=' * (width + 12))

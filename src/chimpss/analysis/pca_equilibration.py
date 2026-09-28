@@ -152,24 +152,29 @@ def load_model(prefix: str) -> PanGPCRModel:
 # Residue and atom resolution
 # ---------------------------------------------------------------------------
 
-def topology_sequence(topology, chain_index: int = 0) -> List[Tuple[int, str]]:
-    """``[(resid, one_letter), ...]`` for one chain of an mdtraj topology.
+def topology_sequence(topology, chain_index: Optional[int] = 0) -> List[Tuple[int, str]]:
+    """``[(resid, one_letter), ...]`` for one chain -- or every chain -- of a topology.
 
     Non-standard names are normalised (``HID``/``HIE``/``HIP`` all map to
     histidine), and anything that is still not a canonical amino acid is
-    dropped -- lipids, waters and ions must not enter the alignment.
+    dropped -- lipids, waters, ions and an ``UNK`` ligand must not enter the
+    alignment.  ``chain_index=None`` concatenates every chain in order: a
+    receptor written with a chain break at an unmodelled loop otherwise loses
+    everything after the break, silently.
     """
-    chain = list(topology.chains)[chain_index]
+    chains = (list(topology.chains) if chain_index is None
+              else [list(topology.chains)[chain_index]])
     out = []
-    for res in chain.residues:
-        letter = _THREE2ONE.get(_NORM.get(res.name.upper(), res.name.upper()))
-        if letter:
-            out.append((int(res.resSeq), letter))
+    for chain in chains:
+        for res in chain.residues:
+            letter = _THREE2ONE.get(_NORM.get(res.name.upper(), res.name.upper()))
+            if letter:
+                out.append((int(res.resSeq), letter))
     return out
 
 
 def resolve_atoms(topology, naming_info: Sequence[dict], model: PanGPCRModel,
-                  chain_index: int = 0,
+                  chain_index: Optional[int] = 0,
                   scheme: str = 'BW') -> Tuple[np.ndarray, list, dict]:
     """Resolve the model's conserved BW positions to atom indices in ``topology``.
 
@@ -188,8 +193,14 @@ def resolve_atoms(topology, naming_info: Sequence[dict], model: PanGPCRModel,
     traj_seq = topology_sequence(topology, chain_index)
     seq_map, stats = align_sequence_to_gpcrdb(traj_seq, gpcrdb_seq)
 
-    chain = list(topology.chains)[chain_index]
-    by_resid = {int(r.resSeq): r for r in chain.residues}
+    chains = (list(topology.chains) if chain_index is None
+              else [list(topology.chains)[chain_index]])
+    by_resid = {}
+    for chain in chains:
+        for r in chain.residues:
+            letter = _THREE2ONE.get(_NORM.get(r.name.upper(), r.name.upper()))
+            if letter and int(r.resSeq) not in by_resid:
+                by_resid[int(r.resSeq)] = r
     resids, missing_info = map_conserved_resids_aligned(
         bw_map, model.conserved_bw, seq_map, available=set(by_resid))
 

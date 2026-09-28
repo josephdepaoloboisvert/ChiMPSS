@@ -113,6 +113,47 @@ def parse_args():
     p.add_argument('--getcontacts_cores', default=10, type=int,
                    help='CPU cores passed to getContacts via --cores. Default 10.')
 
+    # Convergence decision
+    p.add_argument('--convergence', default='jsd', choices=['jsd', 'panel', 'both', 'either'],
+                   help="Which criterion stops the run. 'jsd' (default) is the published "
+                        "distance-matrix criterion. 'panel' hands the decision to the "
+                        "effect-size convergence panel (mean-structure drift, state "
+                        "stability, ensemble width and basin populations against "
+                        "experimental tolerances, on independent halves of the "
+                        "low-temperature ensemble); the JSD machinery still runs every "
+                        "block for its resampled artifacts and its report is still "
+                        "printed. 'both' requires agreement, 'either' stops on the first. "
+                        "The aggregate-time ceiling stops the run in every mode.")
+    p.add_argument('--panel_pangpcr_prefix', default=None, type=str,
+                   help='Pan-GPCR PCA basis prefix (e.g. models/pangpcr1513). Required '
+                        'for every mode other than jsd.')
+    p.add_argument('--panel_pdb_code', default=None, type=str,
+                   help='Parent structure code; numbers the topology against GPCRdb and '
+                        'selects the receptor for its tolerances. Required unless '
+                        '<output_dir>/analysis/live_panel_config.json already exists.')
+    p.add_argument('--panel_receptor', default=None, type=str,
+                   help='GPCRdb protein slug (ntr1_human) for receptor-specific tolerances. '
+                        'Default: looked up from the parent structure.')
+    p.add_argument('--panel_stor_dir', default='./many_structures/', type=str,
+                   help='Directory holding cached GPCRdb records. Compute nodes have no '
+                        'network: run chimpss-convergence-panel --prepare from a login '
+                        'node first so the numbering is cached here.')
+    p.add_argument('--panel_n_states', default=5, type=int,
+                   help='Lowest temperature rungs pooled for the panel. Default 5 '
+                        '(310.0-312.3 K on the campaign ladder).')
+    p.add_argument('--panel_consecutive', default=3, type=int,
+                   help='Blocks the CONVERGED verdict must hold before the run stops. '
+                        'Default 3.')
+    p.add_argument('--panel_b0_fraction', default=0.25, type=float,
+                   help='Fraction of completed blocks discarded as equilibration before '
+                        'the halves are formed. Default 0.25.')
+    p.add_argument('--panel_width_fraction', default=0.25, type=float,
+                   help='Ensemble-width tolerance as a fraction of the same-state '
+                        'experimental RMSD. Default 0.25.')
+    p.add_argument('--panel_min_blocks', default=16, type=int,
+                   help='Equilibrated blocks below which the panel declines to answer. '
+                        'Default 16 (8 per half).')
+
     p.add_argument('--protein-name', default=None, type=str,
                    help='Protein name for output file naming (no underscores or periods). '
                         'When combined with --ligand-name, outputs are named '
@@ -120,7 +161,25 @@ def parse_args():
     p.add_argument('--ligand-name', default=None, type=str,
                    help='Ligand name for output file naming (no underscores or periods).')
 
-    return p.parse_args()
+    args = p.parse_args()
+    if args.convergence != 'jsd' and not args.panel_pangpcr_prefix:
+        p.error(f'--convergence {args.convergence} requires --panel_pangpcr_prefix')
+    return args
+
+
+def panel_settings(args):
+    """The LivePanel keyword arguments implied by the parsed flags, or None."""
+    if args.convergence == 'jsd':
+        return None
+    return dict(model_prefix=args.panel_pangpcr_prefix,
+                pdb_code=args.panel_pdb_code,
+                receptor=args.panel_receptor,
+                stor_dir=args.panel_stor_dir,
+                n_states=args.panel_n_states,
+                consecutive=args.panel_consecutive,
+                b0_fraction=args.panel_b0_fraction,
+                width_fraction=args.panel_width_fraction,
+                min_blocks=args.panel_min_blocks)
 
 
 def main():
@@ -165,7 +224,9 @@ def main():
                equil_freeze_after=args.equil_freeze_after,
                frobenius_thresh=args.frobenius_thresh,
                jsd_thresh=args.jsd_thresh,
-               getContacts_Info=getContacts_Info)
+               getContacts_Info=getContacts_Info,
+               convergence=args.convergence,
+               panel=panel_settings(args))
 
 
 if __name__ == '__main__':

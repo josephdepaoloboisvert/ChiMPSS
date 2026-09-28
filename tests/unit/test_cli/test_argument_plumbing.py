@@ -237,3 +237,46 @@ def test_convergence_bundle_component_count_is_configurable():
     finally:
         sys.argv = argv
     assert args.pc_timeseries == 5
+
+
+# ---------------------------------------------------------------------------
+# chimpss-fultonmarket --convergence
+# ---------------------------------------------------------------------------
+
+_FM_POSITIONAL = ['chimpss-fultonmarket', 'in.pdb', 'sys.xml', 'out/']
+
+
+def test_fultonmarket_convergence_defaults_to_the_published_criterion(monkeypatch):
+    from chimpss.cli import fultonmarket
+    monkeypatch.setattr('sys.argv', _FM_POSITIONAL)
+    args = fultonmarket.parse_args()
+    assert args.convergence == 'jsd'
+    assert fultonmarket.panel_settings(args) is None
+
+
+def test_fultonmarket_panel_mode_requires_a_basis(monkeypatch):
+    from chimpss.cli import fultonmarket
+    monkeypatch.setattr('sys.argv', _FM_POSITIONAL + ['--convergence', 'panel'])
+    with pytest.raises(SystemExit) as exc:
+        fultonmarket.parse_args()
+    assert exc.value.code == 2
+
+
+def test_fultonmarket_panel_settings_are_plumbed(monkeypatch):
+    from chimpss.cli import fultonmarket
+    monkeypatch.setattr('sys.argv', _FM_POSITIONAL + [
+        '--convergence', 'both', '--panel_pangpcr_prefix', 'models/pangpcr1513',
+        '--panel_pdb_code', '6OS9', '--panel_consecutive', '4', '--panel_n_states', '3'])
+    args = fultonmarket.parse_args()
+    s = fultonmarket.panel_settings(args)
+    assert s['model_prefix'] == 'models/pangpcr1513' and s['pdb_code'] == '6OS9'
+    assert s['consecutive'] == 4 and s['n_states'] == 3
+    assert set(s) == {'model_prefix', 'pdb_code', 'receptor', 'stor_dir', 'n_states',
+                      'consecutive', 'b0_fraction', 'width_fraction', 'min_blocks'}
+
+
+def test_fultonmarket_rejects_an_unknown_convergence_mode(monkeypatch):
+    from chimpss.cli import fultonmarket
+    monkeypatch.setattr('sys.argv', _FM_POSITIONAL + ['--convergence', 'vibes'])
+    with pytest.raises(SystemExit):
+        fultonmarket.parse_args()

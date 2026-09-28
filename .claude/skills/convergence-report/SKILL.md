@@ -66,6 +66,37 @@ never gate — a null-rejection test gets harder to pass as a converged run
 lengthens, so it cannot be a stopping rule. See the report "Which Metrics See
 Convergence" (28 Sep 2026) for the full audit.
 
+## 0c. Live stopping rule for a fresh simulation
+
+`chimpss-fultonmarket --convergence panel` makes the panel the stopping rule
+inside the PTRE block loop (`FultonMarket._evaluate_panel`, rank 0, verdict
+broadcast). After every block it reads that block's `positions.npy` for the
+lowest rungs into `<run_dir>/analysis/live_panel/`, evaluates the four gates on
+everything cached, prints a `[PASS]/[FAIL]` table beside the JSD report, and
+stops only when CONVERGED has held for `--panel_consecutive` blocks (default
+3) and the minimum-fraction floor is past. The JSD machinery still runs every
+block for its resampled artifacts; `both`/`either` combine the two verdicts;
+the aggregate-time ceiling stops the run in every mode. State persists in
+`live_panel_state.json`, so a resubmitted job continues its streak.
+
+Pre-flight from a login node (compute nodes have no network):
+
+```bash
+chimpss-convergence-panel <run_dir> --pdb <equil.pdb> \
+  --pangpcr_prefix models/pangpcr1513 --pdb_code <SYS_PDB> \
+  --stor_dir many_structures/ --prepare
+```
+
+This resolves the 190 conserved atoms against the topology (every protein
+chain), caches the GPCRdb numbering, computes the tolerances and writes
+`live_panel_config.json`; it fails fast if any conserved position is absent.
+That failure is information about the *system*: the 5HT2BR_LSD construct as
+built ends at residue 336 (BW 6.47) -- no TM7, no H8 -- because the
+RepairProtein tails were `[56, 336]` while the parent 7SRS resolves to 460.
+Rebuild such a system; do not switch it to `jsd` to make the check pass.
+`slurm/config.sh` sets `PTRE_CONVERGENCE=panel`; the job scripts run the
+pre-flight when `live_panel_config.json` is absent and exit 3 if it fails.
+
 ## 0. What the criterion cannot see
 
 Two blind spots are structural, not bugs, and both matter for how the report

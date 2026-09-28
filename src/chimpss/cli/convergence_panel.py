@@ -41,6 +41,14 @@ def parse_args():
     p.add_argument('--prefix_curve', action='store_true',
                    help='Also evaluate the panel at every 8 blocks from 32 onward.')
     p.add_argument('--out', default=None, help='JSON output path.')
+    p.add_argument('--prepare', action='store_true',
+                   help='Pre-flight for a live run: resolve the conserved atoms against '
+                        '--pdb, fetch and cache the GPCRdb numbering, compute the '
+                        'tolerances, and write <run_dir>/analysis/live_panel_config.json. '
+                        'Run this from a node with network access before submitting a '
+                        'job with chimpss-fultonmarket --convergence panel.')
+    p.add_argument('--consecutive', type=int, default=3,
+                   help='With --prepare: blocks the verdict must hold (default 3).')
     return p.parse_args()
 
 
@@ -50,6 +58,21 @@ def main():
     from chimpss.analysis import convergence_panel as cp
 
     a = parse_args()
+    if a.prepare:
+        from chimpss.analysis.convergence_panel import LivePanel
+        lp = LivePanel(run_dir=a.run_dir, topology=a.pdb, model_prefix=a.pangpcr_prefix,
+                       pdb_code=a.pdb_code, receptor=a.receptor, stor_dir=a.stor_dir,
+                       n_states=a.n_states, skip=a.skip, width_fraction=a.width_fraction,
+                       consecutive=a.consecutive, n_pc=a.n_pc)
+        cfg = lp.prepare()
+        print(f"mapping: identity {cfg['mapping'].get('identity', float('nan')):.3f}, "
+              f"{cfg['mapping'].get('n_resolved')}/{cfg['mapping'].get('n_positions')} positions")
+        print(f"tolerances: same-state RMSD {cfg['tolerances']['same_state_rmsd']:.2f} A "
+              f"(receptor {cfg['receptor']}, n={cfg['tolerances']['receptor_n_structures']}); "
+              f"family {cfg['tolerances']['family_same_state_rmsd']:.2f}")
+        print('ready: submit with chimpss-fultonmarket --convergence panel '
+              f'--panel_pangpcr_prefix {a.pangpcr_prefix} --panel_pdb_code {a.pdb_code}')
+        return
     model = load_model(a.pangpcr_prefix)
     naming, _ = fetch_naming_info(a.pdb_code, a.stor_dir)
 

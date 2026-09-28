@@ -131,6 +131,16 @@ def test_interleaved_split_partitions_all_blocks():
     assert abs(a.size - b.size) <= 16
 
 
+def test_interleaved_split_never_leaves_a_side_empty():
+    """17 blocks with 16-block chunks used to put both chunks on one side."""
+    for seed in range(20):
+        rng = np.random.default_rng(seed)
+        for n in (2, 3, 17, 18, 33):
+            a, b = cp._interleaved(np.arange(n), 16, rng)
+            assert a.size > 0 and b.size > 0
+            assert sorted(np.concatenate([a, b]).tolist()) == list(range(n))
+
+
 def test_equilibrated_blocks_default_drops_first_quarter():
     blocks = np.repeat(np.arange(100), 3)
     ub = cp.equilibrated_blocks(blocks)
@@ -311,3 +321,192 @@ def test_pool_bounds_reads_resample_indices(tmp_path):
     bounds = cp.pool_bounds(str(run))
     assert bounds[0][:2] == (0, 8) and bounds[1][:2] == (5, 17)
     assert bounds[0][2] == 27
+
+
+# ---------------------------------------------------------------------------
+# live use: combine_stop and LivePanel on a synthetic run directory
+# ---------------------------------------------------------------------------
+
+def test_combine_stop_truth_table():
+    cs = cp.combine_stop
+    assert cs('jsd', True, False) and not cs('jsd', False, True)
+    assert cs('panel', False, True) and not cs('panel', True, False)
+    assert cs('both', True, True) and not cs('both', True, False)
+    assert cs('either', False, True) and cs('either', True, None)
+    assert not cs('either', None, None)
+    for mode in cp.STOP_MODES:
+        assert cs(mode, False, False, at_max_time=True)
+    with pytest.raises(ValueError):
+        cs('nope', True, True)
+
+
+def synth_model(n_atoms=30, n_pc=10, seed=0):
+    """A PanGPCRModel fitted on random structures; enough components for n_pc."""
+    from sklearn.decomposition import PCA
+    from chimpss.analysis.pca_equilibration import PanGPCRModel
+    rng = np.random.default_rng(seed)
+    ref = rng.normal(0, 8, (n_atoms, 3))
+    train = ref[None] + rng.normal(0, 1.0, (120, n_atoms, 3))
+    pca = PCA().fit(train.reshape(120, -1))
+    meta = dict(selection='name CA', conserved_bw=[f'{i}.50' for i in range(n_atoms)],
+                n_atoms=n_atoms, structure_meta={})
+    return PanGPCRModel(pca=pca, meta=meta, ref_positions=ref, ref_masses=np.full(n_atoms, 12.0))
+
+
+def write_block(run, block, coords_nm, n_it, n_rep, n_atoms_total, rng, states=None):
+    """Mimic Randolph.save_simulation: raw float32 positions, NPY for the rest."""
+    d = run / 'saved_variables' / str(block)
+    d.mkdir(parents=True, exist_ok=True)
+    pos = np.zeros((n_it, n_rep, n_atoms_total, 3), np.float32)
+    st = np.zeros((n_it, n_rep), np.int64) if states is None else states
+    for it in range(n_it):
+        perm = rng.permutation(n_rep) if states is None else None
+        for r in range(n_rep):
+            if states is None:
+                st[it, r] = perm[r]
+            pos[it, r] = coords_nm[it, r]
+    pos.tofile(d / 'positions.npy')                    # no NPY header, as in production
+    np.save(d / 'states.npy', st)
+    np.save(d / 'temperatures.npy', np.linspace(310, 320, n_rep))
+    for name in ('velocities.npy', 'box_vectors.npy', 'energies.npy'):
+        np.save(d / name, np.zeros(1))
+
+
+def synth_run(tmp_path, n_blocks, model, n_it=4, n_rep=3, n_atoms_total=50,
+              drift_nm_per_block=0.0, seed=0):
+    """n_blocks blocks whose conserved atoms (the first model.n_atoms of the
+    system) scatter 0.06 nm about the model reference, optionally drifting."""
+    rng = np.random.default_rng(seed)
+    run = tmp_path / 'run'
+    base = model.ref_positions / 10.0                              # A -> nm
+    for b in range(n_blocks):
+        coords = np.zeros((n_it, n_rep, n_atoms_total, 3), np.float32)
+        # A deformation, not a translation: superposition removes rigid-body
+        # motion, so half the atoms move +x and the other half -x.
+        half = model.n_atoms // 2
+        shift = np.zeros_like(base)
+        shift[:half, 0] = drift_nm_per_block * b
+        shift[half:, 0] = -drift_nm_per_block * b
+        for it in range(n_it):
+            for r in range(n_rep):
+                coords[it, r, :model.n_atoms] = base + shift + rng.normal(0, 0.06, base.shape)
+                coords[it, r, model.n_atoms:] = rng.normal(0, 1, (n_atoms_total - model.n_atoms, 3))
+        write_block(run, b, coords, n_it, n_rep, n_atoms_total, rng)
+    return run
+
+
+def live_tol(model, run, n_pc=10):
+    """Tolerances whose 'Active' centroid sits at the synthetic ensemble's mean,
+    so the state gate tests stability rather than an arbitrary offset."""
+    tol = make_tol(n_pc=n_pc, sd_pc=3.0)
+    lp = cp.LivePanel(str(run), 'unused.pdb', 'unused', model=model,
+                      atom_indices=np.arange(model.n_atoms), tolerances=tol,
+                      n_states=3, min_blocks=16, n_atoms_total=50)
+    lp.prepare()
+    lp.ingest_all()
+    coords, blocks, _ = lp.load_frames()
+    P = cp.project_superposed(cp.superpose_frames(coords, model), model, n_pc)
+    tol.centroids['Active'][:2] = P[:, :2].mean(0)
+    tol.centroids['Inactive'][:] = tol.centroids['Active'] - 20
+    tol.centroids['Intermediate'][:] = tol.centroids['Active'] - 10
+    return tol
+
+
+def make_live(run, model, tol, **kw):
+    args = dict(model=model, atom_indices=np.arange(model.n_atoms), tolerances=tol,
+                n_states=3, min_blocks=16, n_atoms_total=50)
+    args.update(kw)
+    return cp.LivePanel(str(run), 'unused.pdb', 'unused', **args)
+
+
+def test_live_ingest_is_idempotent_and_reads_lowest_states(tmp_path):
+    model = synth_model()
+    run = synth_run(tmp_path, 3, model)
+    lp = make_live(run, model, make_tol())
+    lp.prepare()
+    assert lp.ingest(0) is True
+    assert lp.ingest(0) is False
+    d = np.load(lp._block_path(0))
+    assert d['coords'].shape == (4 * 3, model.n_atoms, 3)          # n_it * n_states
+    assert sorted(set(d['states'].tolist())) == [0, 1, 2]
+    assert lp.ingest_all() == [1, 2]
+    assert lp.ingest_all() == []
+    assert lp.cached_blocks() == [0, 1, 2]
+
+
+def test_live_prepare_writes_config_and_apply_config_roundtrips(tmp_path):
+    model = synth_model()
+    run = synth_run(tmp_path, 2, model)
+    lp = make_live(run, model, make_tol())
+    cfg = lp.prepare()
+    assert (run / 'analysis' / cp.LivePanel.CONFIG).exists()
+    other = cp.LivePanel(str(run), 'unused.pdb', 'unused', model=model)
+    other.apply_config(cfg)
+    assert other._atom_indices.tolist() == list(range(model.n_atoms))
+    assert other.tolerances.same_state_rmsd == pytest.approx(0.7)
+    assert other.n_states == 3 and other.min_blocks == 16
+
+
+def test_live_insufficient_below_min_blocks(tmp_path):
+    model = synth_model()
+    run = synth_run(tmp_path, 8, model)
+    lp = make_live(run, model, make_tol())
+    lp.prepare(); lp.ingest_all()
+    r = lp.evaluate(sim_no=7)
+    assert r['verdict'] == 'INSUFFICIENT' and r['stop'] is False and r['streak'] == 0
+
+
+def test_live_streak_requires_consecutive_passes_and_persists(tmp_path):
+    model = synth_model()
+    run = synth_run(tmp_path, 24, model)
+    tol = live_tol(model, run)
+    lp = make_live(run, model, tol, consecutive=3)
+    lp.prepare(); lp.ingest_all()
+    r1 = lp.evaluate(sim_no=21)
+    assert r1['verdict'] == 'CONVERGED' and r1['streak'] == 1 and not r1['stop']
+    # re-evaluating the same block must not extend the streak
+    r1b = lp.evaluate(sim_no=21)
+    assert r1b['streak'] == 1
+    r2 = lp.evaluate(sim_no=22)
+    assert r2['streak'] == 2 and not r2['stop']
+    # a fresh instance (a resubmitted job) continues from the persisted state
+    lp2 = make_live(run, model, tol, consecutive=3)
+    lp2.prepare()
+    r3 = lp2.evaluate(sim_no=23)
+    assert r3['streak'] == 3 and r3['stop'] is True
+    assert (run / 'analysis' / cp.LivePanel.STATE).exists()
+
+
+def test_live_past_minimum_gate_blocks_the_stop(tmp_path):
+    model = synth_model()
+    run = synth_run(tmp_path, 24, model)
+    tol = live_tol(model, run)
+    lp = make_live(run, model, tol, consecutive=1)
+    lp.prepare(); lp.ingest_all()
+    r = lp.evaluate(sim_no=23, past_minimum=False)
+    assert r['verdict'] == 'CONVERGED' and r['stop'] is False
+
+
+def test_live_drifting_run_does_not_stop(tmp_path):
+    model = synth_model()
+    # half-vs-half the mean moves ~9 blocks * 0.012 nm ~ 1.1 A, above the 0.7 A tolerance
+    run = synth_run(tmp_path, 24, model, drift_nm_per_block=0.012)
+    tol = live_tol(model, run)
+    lp = make_live(run, model, tol, consecutive=1)
+    lp.prepare(); lp.ingest_all()
+    r = lp.evaluate(sim_no=23)
+    assert r['verdict'] == 'NOT CONVERGED' and not r['stop']
+    assert 'mean_structure' in r['failed']
+
+
+def test_live_report_prints_every_gate(tmp_path, capsys):
+    model = synth_model()
+    run = synth_run(tmp_path, 24, model)
+    tol = live_tol(model, run)
+    lp = make_live(run, model, tol, consecutive=2)
+    lp.prepare(); lp.ingest_all()
+    lp.report(lp.evaluate(sim_no=23))
+    out = capsys.readouterr().out
+    for word in ('Convergence Panel', 'Mean-structure drift', 'State stability',
+                 'Ensemble width', 'Basin populations', 'consecutive blocks', 'verdict'):
+        assert word in out

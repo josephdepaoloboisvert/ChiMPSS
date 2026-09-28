@@ -139,7 +139,9 @@ class FultonMarket():
             frobenius_thresh: float = 0.05,
             jsd_thresh: float = 0.10,
             getContacts_Info: dict = None,
-            skip_contacts: bool = False):
+            skip_contacts: bool = False,
+            convergence: str = 'jsd',
+            panel: dict = None):
         """
         Run parallel tempering replica exchange.
 
@@ -214,6 +216,9 @@ class FultonMarket():
         self.jsd_thresh = jsd_thresh
         self.getContacts_Info = getContacts_Info if getContacts_Info is not None else {}
         self.skip_contacts = skip_contacts
+        self.convergence = convergence
+        self.panel_kwargs = dict(panel or {})
+        self.live_panel = None
 
         # Prepare output directories
         self.output_dir = output_dir
@@ -266,8 +271,11 @@ class FultonMarket():
         printf(f'jsd_thresh          : {self.jsd_thresh}')
         printf(f'getContacts_Info    : {self.getContacts_Info}')
         printf(f'skip_contacts       : {self.skip_contacts}')
+        printf(f'convergence         : {self.convergence}')
+        printf(f'panel               : {self.panel_kwargs or None}')
 
         self._configure_experiment_parameters()
+        self._setup_panel()
 
         while not self.finished:
             if self.sim_no > 0:
@@ -281,7 +289,12 @@ class FultonMarket():
                                  term_overlap_thresh=term_overlap_thresh)
 
             self._save_sub_simulation()
-            self.finished = self._evaluate_stopping_criterion(
+            at_max_time = (self.total_sim_time is not None
+                           and self.sim_no >= self.total_n_sims)
+            # The published criterion runs in every mode: it writes the
+            # resampled trajectory and distance matrices the campaign reports,
+            # and its verdict is printed even when it does not decide.
+            jsd_stop = self._evaluate_stopping_criterion(
                 n_resample=self.n_resample,
                 max_equil_fraction=self.max_equil_fraction,
                 min_ess=self.min_ess,
@@ -290,6 +303,14 @@ class FultonMarket():
                 getContacts_Info=self.getContacts_Info,
                 skip_contacts=self.skip_contacts,
             )
+            panel_stop = None
+            if self.live_panel is not None and not at_max_time:
+                panel_stop = self._evaluate_panel()
+            from chimpss.analysis.convergence_panel import combine_stop
+            self.finished = combine_stop(self.convergence, jsd_stop, panel_stop, at_max_time)
+            if self.live_panel is not None:
+                printf(f"Stop decision ({self.convergence}): jsd={jsd_stop} panel={panel_stop} "
+                       f"max_time={at_max_time} -> {'STOP' if self.finished else 'continue'}")
             self.sim_no += 1
 
 
@@ -620,6 +641,61 @@ class FultonMarket():
             printf(f'WARNING: could not persist the equilibration ratchet ({exc}).')
         return kept
 
+
+    def _setup_panel(self):
+        """Build the live convergence panel when a mode other than 'jsd' is requested.
+
+        Preparation resolves the conserved atoms against the topology and the
+        tolerances against the training set.  It runs on rank 0 and the
+        resulting config is broadcast, so every rank holds the same atom set
+        and the same thresholds; a construct that cannot be numbered fails
+        here, before the first block is paid for.
+        """
+        from chimpss.analysis.convergence_panel import STOP_MODES, LivePanel
+
+        if self.convergence not in STOP_MODES:
+            raise ValueError(f'unknown convergence mode {self.convergence!r}; '
+                             f'choose from {STOP_MODES}')
+        if self.convergence == 'jsd':
+            self.live_panel = None
+            return
+        required = ('model_prefix',)
+        missing = [k for k in required if not self.panel_kwargs.get(k)]
+        if missing:
+            raise ValueError(f"convergence={self.convergence!r} needs panel settings "
+                             f"{missing} (chimpss-fultonmarket --panel_pangpcr_prefix ...)")
+        self.live_panel = LivePanel(run_dir=self.output_dir, topology=self.input_pdb,
+                                    printf=printf, **self.panel_kwargs)
+        cfg = self._panel_prepare()
+        self.live_panel.apply_config(cfg)
+        printf(f"convergence panel armed: stop when CONVERGED for "
+               f"{self.live_panel.consecutive} consecutive blocks "
+               f"(mode {self.convergence!r})")
+
+    @mpiplus.on_single_node(rank=0, broadcast_result=True, sync_nodes=True)
+    def _panel_prepare(self):
+        cfg = self.live_panel.prepare()
+        # catch up on blocks a previous submission saved but never ingested
+        new = self.live_panel.ingest_all()
+        if new:
+            printf(f"convergence panel: ingested {len(new)} existing block(s)")
+        return cfg
+
+    @mpiplus.on_single_node(rank=0, broadcast_result=True, sync_nodes=True)
+    def _evaluate_panel(self):
+        """Ingest the block just saved, evaluate the panel, print, return stop."""
+        try:
+            self.live_panel.ingest_all()
+            past_minimum = (self.total_sim_time is None
+                            or self.sim_no >= self.total_n_sims * self.minimum_fraction4convergence)
+            result = self.live_panel.evaluate(sim_no=self.sim_no, past_minimum=past_minimum)
+            self.live_panel.report(result)
+            return bool(result['stop'])
+        except Exception as exc:
+            # The panel is a stopping rule, not a reason to lose the sampling:
+            # a block that cannot be evaluated is reported and the run goes on.
+            printf(f"WARNING: convergence panel could not evaluate block {self.sim_no}: {exc}")
+            return False
 
     def _evaluate_stopping_criterion(self, n_resample=1000, max_equil_fraction=0.75, frobenius_thresh=0.05, jsd_thresh=0.10, getContacts_Info=None, skip_contacts=False, min_ess=None):
         """
