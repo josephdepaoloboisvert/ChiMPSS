@@ -53,13 +53,11 @@ def parse_args():
 
 
 def main():
-    from chimpss.analysis.gpcr_pca import fetch_naming_info
-    from chimpss.analysis.pca_equilibration import load_model
     from chimpss.analysis import convergence_panel as cp
+    from chimpss.analysis.convergence_panel import LivePanel
 
     a = parse_args()
     if a.prepare:
-        from chimpss.analysis.convergence_panel import LivePanel
         lp = LivePanel(run_dir=a.run_dir, topology=a.pdb, model_prefix=a.pangpcr_prefix,
                        pdb_code=a.pdb_code, receptor=a.receptor, stor_dir=a.stor_dir,
                        n_states=a.n_states, skip=a.skip, width_fraction=a.width_fraction,
@@ -73,33 +71,29 @@ def main():
         print('ready: submit with chimpss-fultonmarket --convergence panel '
               f'--panel_pangpcr_prefix {a.pangpcr_prefix} --panel_pdb_code {a.pdb_code}')
         return
-    model = load_model(a.pangpcr_prefix)
-    naming, _ = fetch_naming_info(a.pdb_code, a.stor_dir)
-
-    receptor = a.receptor
-    if receptor is None:
-        with open(f'{a.pangpcr_prefix}_meta.json') as fh:
-            sm = json.load(fh)['structure_meta']
-        receptor = sm.get(a.pdb_code.upper(), {}).get('protein')
-        if receptor is None:
-            print(f'  parent {a.pdb_code} is not in the training set; using family tolerances')
-    tol = cp.experimental_tolerances(a.pangpcr_prefix, receptor=receptor, n_pc=a.n_pc)
-
-    print(f'reading the {a.n_states} lowest rungs of every block ...', flush=True)
-    coords, blocks, states, info = cp.collect_low_temperature_frames(
-        a.run_dir, a.pdb, model, naming, n_states=a.n_states, skip=a.skip)
-    if coords.shape[0] == 0:
+    lp = LivePanel(run_dir=a.run_dir, topology=a.pdb, model_prefix=a.pangpcr_prefix,
+                   pdb_code=a.pdb_code, receptor=a.receptor, stor_dir=a.stor_dir,
+                   n_states=a.n_states, skip=a.skip, b0_fraction=0.25,
+                   width_fraction=a.width_fraction, n_pc=a.n_pc)
+    lp.prepare()
+    print(f'reading the {a.n_states} lowest rungs of every block (MBAR weights per block) ...', flush=True)
+    new = lp.ingest_all()
+    if new:
+        print(f'  ingested {len(new)} block(s)')
+    blocks_cached = lp.cached_blocks()
+    if not blocks_cached:
         sys.exit('no frames read')
-    if info['n_resolved'] < info['n_positions']:
-        sys.exit(f"only {info['n_resolved']} of {info['n_positions']} conserved positions "
-                 f"resolved in the topology; the panel needs all of them")
-    X = cp.superpose_frames(coords, model)
-    P = cp.project_superposed(X, model, n_pc=a.n_pc)
-    train_sd = np.load(f'{a.pangpcr_prefix}_train_projections.npy')[:, :a.n_pc].std(0)
-
-    r = cp.panel(X, P, blocks, tol, b0=a.b0, width_fraction=a.width_fraction, train_sd=train_sd)
+    wr = lp.weights_report()
+    if wr:
+        print(f"  MBAR at rung 0 over rungs 0-{a.n_states - 1}: ESS/block median {wr['ess_median']:.0f} "
+              f"(p10 {wr['ess_p10']:.0f}); weight by rung "
+              f"{' / '.join(f'{100 * x:.0f}' for x in wr['rung_share_mean'])} %"
+              + (f"; solver fell back on {wr['n_failed']} block(s)" if wr['n_failed'] else ''))
+    r_live = lp.evaluate(sim_no=blocks_cached[-1], past_minimum=True, persist=False)
+    r = r_live['full']
     r['run_dir'] = a.run_dir
-    r['mapping'] = {k: info[k] for k in ('identity', 'n_aligned', 'n_positions', 'n_resolved')}
+    r['mapping'] = lp.mapping
+    r['weights'] = wr
     print(cp.format_panel(r))
 
     bounds = cp.pool_bounds(a.run_dir)
@@ -113,9 +107,14 @@ def main():
               f"{'largely by construction' if np.median(ov) > 0.5 else 'comparing mostly independent data'}")
 
     if a.prefix_curve:
-        nb = int(np.unique(blocks).size)
+        nb = len(blocks_cached)
         pref = list(range(32, nb, 8)) + [nb]
-        curve = cp.prefix_curve(X, P, blocks, tol, pref, width_fraction=a.width_fraction)
+        curve = []
+        for n in pref:
+            e = lp.evaluate(sim_no=n - 1, past_minimum=True, max_block=n - 1, persist=False)
+            curve.append(dict(N=n, verdict=e['verdict'], b0=e['b0'], mean_rmsd=e['mean_rmsd'],
+                              mean_rmsd_q95=e['mean_rmsd_q95'], state=e['state'], pc1_shift=e['pc1_shift'],
+                              w1=e['w1'], n_basins=e['n_basins']))
         r['prefix_curve'] = curve
         print(f"\n{'N':>4} {'verdict':>14} {'b0':>3} {'mean RMSD':>9} {'q95':>6} {'state':>12} {'PC1 shift':>9} {'W1':>6} {'basins':>6}")
         for c in curve:

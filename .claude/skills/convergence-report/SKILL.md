@@ -49,10 +49,14 @@ chimpss-convergence-panel <run_dir> \
   --stor_dir many_structures/ --prefix_curve
 ```
 
-`chimpss.analysis.convergence_panel` reads the five lowest rungs of every
-iteration (no MBAR, no skip; cached under `analysis/`), superposes the
-conserved Cα atoms on the pan-GPCR reference, discards the first quarter of
-blocks, and gates on effect sizes against experimental tolerances on the two
+`chimpss.analysis.convergence_panel` reads the eight lowest rungs of every
+iteration together with their reduced potentials, solves MBAR over those
+rungs per block so every frame is weighted in the block's 310 K ensemble
+(on NTSR1 rep0: 41/26/15/7/4 % on rungs 0–4, the production resample's own
+proportions; ESS 43 of 152 frames per block), superposes the conserved Cα
+atoms on the pan-GPCR reference, and forms per-block weighted means — the
+time-ordered series. Blocks weigh equally. It discards the first quarter of
+blocks and gates on effect sizes against experimental tolerances on the two
 contiguous halves: mean-structure RMSD vs the same-state reproducibility of
 the receptor's own structures (0.92 Å for NTSR1; family median 0.69 Å),
 state assignment per quarter plus half-shift vs within-state spread, ensemble
@@ -96,6 +100,23 @@ RepairProtein tails were `[56, 336]` while the parent 7SRS resolves to 460.
 Rebuild such a system; do not switch it to `jsd` to make the check pass.
 `slurm/config.sh` sets `PTRE_CONVERGENCE=panel`; the job scripts run the
 pre-flight when `live_panel_config.json` is absent and exit 3 if it fails.
+
+## 0d. Two rules about what a frame is
+
+**Reweight; never pool rungs unweighted.** Frames from rungs above the target
+are samples of a different ensemble. Per-block MBAR over the rungs actually
+read gives the exact weights for an estimate built from those frames; the
+cost is one small solve per block. Uniform pooling of five rungs changed
+nothing on rep0 (0.480 vs 0.482 Å) because it is one basin, and would bias a
+system near a transition toward the warmer ensemble exactly when the state
+gate matters.
+
+**Only the block carries a time index.** The replica at the 310 K rung
+changes identity at almost every exchange attempt (nine times per
+19-iteration block on rep0, six replicas per block). A "rung-0 trajectory" is
+a valid sample of the 310 K ensemble but not a dynamical series; blocking
+analyses, drift plots and equilibration detection belong on per-block
+weighted means or medians, never on frames.
 
 ## 0. What the criterion cannot see
 

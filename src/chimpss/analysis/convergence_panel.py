@@ -171,80 +171,6 @@ def _fingerprint(model: PanGPCRModel) -> str:
     return hashlib.sha1(key.encode()).hexdigest()[:8]
 
 
-def collect_low_temperature_frames(run_dir: str, topology: str, model: PanGPCRModel,
-                                   naming_info: Sequence[dict], n_states: int = 5,
-                                   skip: int = 0, chain_index: int = 0,
-                                   cache: bool = True, max_blocks: Optional[int] = None,
-                                   _printf: Callable = print
-                                   ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
-    """Conserved atoms of the ``n_states`` lowest rungs, every iteration.
-
-    Returns ``(coords_nm, blocks, states, info)``.  ``skip`` discards the first
-    ``skip`` iterations of each block (a restart from checkpoint carries
-    velocities, so the default keeps all of them).  With the default ladder the
-    first five rungs span 310.0-312.3 K, close enough that pooling them is a
-    2 % change in beta; the state of every frame is returned so a caller can
-    reweight or restrict to rung 0.
-    """
-    import mdtraj as md
-
-    tag = f'lowT_s{n_states}_skip{skip}_{_fingerprint(model)}'
-    out_path = os.path.join(run_dir, 'analysis', f'{tag}.npz')
-    if cache and os.path.exists(out_path):
-        d = np.load(out_path)
-        info = json.loads(str(d['info']))
-        available = {int(os.path.basename(p)) for p in _block_dirs(run_dir)
-                     if os.path.exists(os.path.join(p, 'positions.npy'))}
-        if max_blocks is not None:
-            available = set(sorted(available)[:max_blocks])
-        if not (available - set(info['blocks_read'])):
-            return d['coords'], d['blocks'], d['states'], info
-        _printf(f'low-T frame cache is stale; rebuilding')
-
-    top_traj = md.load(topology)
-    atom_indices, missing, stats_ = resolve_atoms(top_traj.topology, naming_info, model,
-                                                  chain_index=chain_index)
-    n_atoms_total = top_traj.n_atoms
-    dirs = _block_dirs(run_dir)
-    if max_blocks is not None:
-        dirs = dirs[:max_blocks]
-
-    frames, blocks, states_ = [], [], []
-    read = []
-    for d in dirs:
-        ppath, spath = os.path.join(d, 'positions.npy'), os.path.join(d, 'states.npy')
-        if not (os.path.exists(ppath) and os.path.exists(spath)):
-            continue
-        st = np.load(spath)
-        tpath = os.path.join(d, 'temperatures.npy')
-        n_rep = int(np.load(tpath, allow_pickle=True).size) if os.path.exists(tpath) else st.shape[1]
-        pos = _load_positions(ppath, st.shape[0], n_rep, n_atoms_total)
-        if pos is None:
-            continue
-        b = int(os.path.basename(d))
-        read.append(b)
-        for it in range(skip, min(st.shape[0], pos.shape[0])):
-            for s in range(n_states):
-                hit = np.where(st[it] == s)[0]
-                if hit.size:
-                    frames.append(np.asarray(pos[it, hit[0]][atom_indices], dtype=np.float32))
-                    blocks.append(b)
-                    states_.append(s)
-        del pos
-
-    coords = np.stack(frames) if frames else np.empty((0, atom_indices.size, 3), np.float32)
-    blocks_a = np.asarray(blocks, np.int64)
-    states_a = np.asarray(states_, np.int64)
-    info = dict(stats_, atom_indices=atom_indices.tolist(), n_states=int(n_states),
-                skip=int(skip), n_frames=int(coords.shape[0]), blocks_read=read,
-                missing=[[lbl, int(i), why] for lbl, i, why in missing])
-    if cache:
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        np.savez_compressed(out_path, coords=coords, blocks=blocks_a, states=states_a,
-                            info=json.dumps(info))
-    return coords, blocks_a, states_a, info
-
-
 def superpose_frames(coords_nm: np.ndarray, model: PanGPCRModel) -> np.ndarray:
     """Every frame superposed on the model reference, in angstroms."""
     x = np.asarray(coords_nm, np.float64) * NM_TO_ANGSTROM
@@ -253,6 +179,74 @@ def superpose_frames(coords_nm: np.ndarray, model: PanGPCRModel) -> np.ndarray:
 
 def project_superposed(X: np.ndarray, model: PanGPCRModel, n_pc: int = 10) -> np.ndarray:
     return np.asarray(model.pca.transform(X.reshape(X.shape[0], -1))[:, :n_pc], np.float64)
+
+
+def block_mbar_weights(u: np.ndarray, states: np.ndarray, n_states: int,
+                       target: int = 0) -> Tuple[np.ndarray, np.ndarray, bool]:
+    """MBAR weights of one block's frames at the target rung.
+
+    ``u[i, k]`` is the reduced potential of frame ``i`` at rung ``k`` for the
+    ``n_states`` lowest rungs; ``states[i]`` the rung frame ``i`` was sampled
+    at.  Solving MBAR over these rungs alone is exact for an estimate built
+    from these frames, and on the campaign ladder the rungs above the fifth
+    carry 0.7 % of the full-ladder weight at 310 K.  Returns
+    ``(weights, f_k, ok)``; on a solver failure the weights fall back to the
+    frames sampled at the target rung, uniformly, and ``ok`` is False.
+    """
+    u = np.asarray(u, np.float64)
+    states = np.asarray(states, np.int64)
+    n = u.shape[0]
+    N_k = np.bincount(states, minlength=n_states)[:n_states]
+    fallback = np.where(states == target, 1.0, 0.0)
+    fallback = fallback / fallback.sum() if fallback.sum() else np.full(n, 1.0 / n)
+    if n == 0 or N_k[target] == 0:
+        return fallback, np.full(n_states, np.nan), False
+    try:
+        from pymbar import MBAR
+        mbar = MBAR(u.T, N_k, initialize='BAR')
+        W = np.asarray(mbar.weights())                     # (n, K)
+        w = W[:, target]
+        if not np.isfinite(w).all() or w.sum() <= 0:
+            raise ValueError('non-finite weights')
+        w = w / w.sum()
+        f_k = np.asarray(mbar.f_k, np.float64) if hasattr(mbar, 'f_k') else np.full(n_states, np.nan)
+        return w, f_k, True
+    except Exception:
+        return fallback, np.full(n_states, np.nan), False
+
+
+def normalize_block_weights(blocks: np.ndarray, w: Optional[np.ndarray] = None) -> np.ndarray:
+    """Per-frame weights that sum to one within every block.
+
+    A block is a fixed interval of wall-clock time over which the whole
+    ensemble was sampled, so blocks carry equal weight; within a block the
+    MBAR weights (or, without them, a uniform share) define the 310 K
+    ensemble.  Every statistic here is a mean over blocks of a weighted mean
+    within blocks.
+    """
+    blocks = np.asarray(blocks)
+    out = np.ones(blocks.size, np.float64) if w is None else np.asarray(w, np.float64).copy()
+    for b in np.unique(blocks):
+        m = blocks == b
+        tot = out[m].sum()
+        out[m] = out[m] / tot if tot > 0 else 1.0 / m.sum()
+    return out
+
+
+def _set_weights(blocks: np.ndarray, w: np.ndarray, bl: Sequence[int]) -> Tuple[np.ndarray, np.ndarray]:
+    """Frame indices in the blocks ``bl`` and their weights, summing to one."""
+    m = np.isin(blocks, bl)
+    idx = np.where(m)[0]
+    ww = w[idx] / len(np.unique(blocks[idx])) if idx.size else w[idx]
+    return idx, ww
+
+
+def _wmean(X: np.ndarray, w: np.ndarray) -> np.ndarray:
+    return np.tensordot(w, X, axes=(0, 0)) / w.sum()
+
+
+def _wdraw(idx: np.ndarray, w: np.ndarray, n: int, rng: np.random.Generator) -> np.ndarray:
+    return rng.choice(idx, size=n, replace=True, p=w / w.sum())
 
 
 # ---------------------------------------------------------------------------
@@ -349,15 +343,14 @@ def _halves(ub: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 def _interleaved(ub: np.ndarray, chunk: int, rng: np.random.Generator
                  ) -> Tuple[np.ndarray, np.ndarray]:
-    """Alternate chunks of ``chunk`` blocks between two sets, random assignment.
+    """Alternate chunks of ``chunk`` blocks between two sets, random phase.
 
     Two sets built this way sample the same time span, so any difference
     between them is finite-sample noise plus autocorrelation shorter than
     ``chunk`` -- the floor against which a contiguous-halves difference is read.
+    Chunks alternate from a random phase so both sets are populated whenever
+    there are at least two chunks.
     """
-    # Chunks alternate between the two sets from a random phase, so both sets
-    # are populated whenever there are at least two chunks; a random
-    # permutation could put every chunk on one side when there are few.
     chunk = max(1, min(int(chunk), ub.size // 2))
     chunks = [ub[i:i + chunk] for i in range(0, ub.size, chunk)]
     phase = int(rng.integers(0, 2))
@@ -370,34 +363,75 @@ def _mean_rmsd(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.sqrt(((a - b) ** 2).sum(-1).mean()))
 
 
-def _frame_rmsd_triangle(X: np.ndarray, n_atoms: int, sub: int,
-                         rng: np.random.Generator) -> np.ndarray:
-    Z = X[rng.choice(X.shape[0], min(sub, X.shape[0]), replace=False)].reshape(-1, n_atoms * 3)
+def _frame_rmsd_triangle(X: np.ndarray, idx: np.ndarray, w: np.ndarray, n_atoms: int,
+                         sub: int, rng: np.random.Generator) -> np.ndarray:
+    """Frame-frame RMSDs of ``sub`` frames drawn by weight from ``idx``.
+
+    Drawing with replacement is what the production importance resample does;
+    pairs of the same source frame would add zeros, so they are dropped.
+    """
+    draw = _wdraw(idx, w, min(sub, idx.size), rng)
+    Z = X[draw].reshape(draw.size, n_atoms * 3)
     sq = (Z ** 2).sum(1)
     D2 = sq[:, None] + sq[None] - 2.0 * Z @ Z.T
     D = np.sqrt(np.clip(D2, 0, None) / n_atoms)
-    return D[np.triu_indices(Z.shape[0], 1)]
+    i, j = np.triu_indices(draw.size, 1)
+    keep = draw[i] != draw[j]
+    return D[i[keep], j[keep]]
+
+
+# ---------------------------------------------------------------------------
+# Block-level time series
+# ---------------------------------------------------------------------------
+
+def block_series(X: np.ndarray, P: np.ndarray, blocks: np.ndarray, w: np.ndarray,
+                 ub: Optional[np.ndarray] = None) -> dict:
+    """Per-block weighted statistics: the time-ordered description of the run.
+
+    A block is the unit of time.  Within a block the replica at the target
+    rung changes identity at almost every exchange attempt (nine times per
+    19-iteration block on NTSR1 rep0), so frames at one rung are a valid
+    sample but not a trajectory; the block's weighted mean or median is the
+    quantity with a time index.
+    """
+    ub = np.unique(blocks) if ub is None else np.asarray(ub)
+    mean_pc, med_pc, mean_x, ess = [], [], [], []
+    for b in ub:
+        m = blocks == b
+        wb = w[m] / w[m].sum()
+        mean_pc.append(_wmean(P[m], wb))
+        order = np.argsort(P[m], axis=0)
+        cw = np.cumsum(np.take_along_axis(np.repeat(wb[:, None], P.shape[1], 1), order, 0), axis=0)
+        med_idx = np.argmax(cw >= 0.5, axis=0)
+        med_pc.append(np.take_along_axis(P[m], order, 0)[med_idx, np.arange(P.shape[1])])
+        mean_x.append(_wmean(X[m], wb))
+        ess.append(1.0 / np.sum(wb ** 2))
+    mean_x = np.stack(mean_x)
+    grand = mean_x.mean(0)
+    return dict(blocks=ub.tolist(), mean_pc=np.stack(mean_pc), median_pc=np.stack(med_pc),
+                mean_structure=mean_x, rmsd_to_grand_mean=[_mean_rmsd(x, grand) for x in mean_x],
+                ess=ess)
 
 
 # ---------------------------------------------------------------------------
 # Gates
 # ---------------------------------------------------------------------------
 
-def mean_structure_drift(X: np.ndarray, blocks: np.ndarray, ub: np.ndarray,
+def mean_structure_drift(X: np.ndarray, blocks: np.ndarray, ub: np.ndarray, w: np.ndarray,
                          n_boot: int = 200, chunks: Sequence[int] = (8, 16),
                          n_null: int = 6, seed: int = 0) -> dict:
-    """RMSD between the mean structures of the two contiguous halves.
+    """RMSD between the weighted mean structures of the two contiguous halves.
 
-    ``boot_q95`` resamples blocks within each half (block bootstrap), so it is
-    the upper bound of the drift itself; ``null_p95`` is the same statistic on
-    interleaved splits, the value two samples of the same ensemble give.
+    ``boot_q95`` resamples blocks within each half (block bootstrap), the upper
+    bound of the drift itself; ``null_p95`` is the same statistic on
+    interleaved splits, what two samples of one ensemble give.
     """
     rng = np.random.default_rng(seed)
     h1, h2 = _halves(ub)
-    by = {b: X[blocks == b] for b in ub}
+    bm = {b: _wmean(X[blocks == b], w[blocks == b]) for b in ub}
 
     def mean_of(bl):
-        return np.concatenate([by[b] for b in bl]).mean(0)
+        return np.mean([bm[b] for b in bl], axis=0)
 
     obs = _mean_rmsd(mean_of(h1), mean_of(h2))
     boots = [_mean_rmsd(mean_of(rng.choice(h1, h1.size)), mean_of(rng.choice(h2, h2.size)))
@@ -407,40 +441,40 @@ def mean_structure_drift(X: np.ndarray, blocks: np.ndarray, ub: np.ndarray,
         for _ in range(n_null):
             a, b = _interleaved(ub, c, rng)
             null.append(_mean_rmsd(mean_of(a), mean_of(b)))
+    idx, ww = _set_weights(blocks, w, ub)
+    grand = _wmean(X[idx], ww)
+    spread = float(np.sqrt(np.sum(ww * ((X[idx] - grand) ** 2).sum(-1).mean(-1)) / ww.sum()))
     return dict(rmsd=obs, boot_q95=float(np.quantile(boots, 0.95)),
                 boot_median=float(np.median(boots)),
                 null_median=float(np.median(null)), null_p95=float(np.quantile(null, 0.95)),
-                per_frame_rmsd_to_mean=float(np.sqrt(((X - X.mean(0)) ** 2).sum(-1).mean())))
+                per_frame_rmsd_to_mean=spread)
 
 
-def state_stability(P: np.ndarray, blocks: np.ndarray, ub: np.ndarray,
-                    tol: Tolerances, n_pc: int = 2, min_state_n: int = 20) -> dict:
+def state_stability(P: np.ndarray, blocks: np.ndarray, ub: np.ndarray, tol: Tolerances,
+                    w: np.ndarray, n_pc: int = 2, min_state_n: int = 20) -> dict:
     """Quarter-wise state assignment and half-vs-half shift along PC1..n_pc.
 
     The tolerance along each component is the experimental spread of
-    structures in the assigned state; states with fewer than ``min_state_n``
-    structures (GPCRdb's *Intermediate*) borrow the smaller of the two
-    well-populated states so a thin class cannot loosen the test.
+    structures in the assigned state; a thinly populated state (GPCRdb's
+    *Intermediate*, 12 structures) borrows the tighter of the well-populated
+    spreads so it cannot loosen the test.
     """
     quarters = np.array_split(ub, 4)
     names = tol.states
     C = np.stack([tol.centroids[s][:n_pc] for s in names])
-    qmeans = np.array([P[np.isin(blocks, q), :n_pc].mean(0) for q in quarters])
+    bm = {b: _wmean(P[blocks == b, :n_pc], w[blocks == b]) for b in ub}
+    qmeans = np.array([np.mean([bm[b] for b in q], axis=0) for q in quarters])
     assign = [names[int(np.argmin(np.linalg.norm(C - m, axis=1)))] for m in qmeans]
     h1, h2 = _halves(ub)
-    m1 = P[np.isin(blocks, h1), :n_pc].mean(0)
-    m2 = P[np.isin(blocks, h2), :n_pc].mean(0)
-    shift = m2 - m1
+    shift = np.mean([bm[b] for b in h2], axis=0) - np.mean([bm[b] for b in h1], axis=0)
     state = max(set(assign), key=assign.count)
-    # a thinly populated state (GPCRdb's Intermediate: 12 structures) borrows
-    # the tighter of the well-populated spreads, so it cannot loosen the test
     if tol.state_counts.get(state, 0) >= min_state_n:
         sd = tol.within_state_sd[state][:n_pc]
     else:
         cands = [tol.within_state_sd[s][:n_pc] for s in names
                  if tol.state_counts.get(s, 0) >= min_state_n]
         sd = np.min(np.stack(cands), axis=0) if cands else tol.within_state_sd[state][:n_pc]
-    overall = P[np.isin(blocks, ub), :n_pc].mean(0)
+    overall = np.mean([bm[b] for b in ub], axis=0)
     d_all = np.linalg.norm(C - overall, axis=1)
     order = np.argsort(d_all)
     return dict(quarter_means=qmeans.tolist(), quarter_assign=assign, state=state,
@@ -451,77 +485,82 @@ def state_stability(P: np.ndarray, blocks: np.ndarray, ub: np.ndarray,
                 pass_=bool(len(set(assign)) == 1 and np.all(np.abs(shift) <= sd)))
 
 
-
 def ensemble_width(X: np.ndarray, blocks: np.ndarray, ub: np.ndarray, n_atoms: int,
-                   sub: int = 400, chunks: Sequence[int] = (8, 16), n_null: int = 6,
-                   seed: int = 0) -> dict:
+                   w: np.ndarray, sub: int = 400, chunks: Sequence[int] = (8, 16),
+                   n_null: int = 6, seed: int = 0) -> dict:
     """Distance between the two halves' frame-frame RMSD distributions.
 
-    This is the production observable (the distribution of inter-frame
-    distances within an ensemble) with two changes: the two ensembles are
-    independent halves of the raw low-temperature data rather than
-    overlapping MBAR resamples, and the distance is reported as Wasserstein-1
-    in angstroms -- how far the distribution moved -- beside the JSD.
+    The production observable -- the distribution of inter-frame distances
+    within an ensemble -- with two changes: the two ensembles are independent
+    halves of the run drawn by MBAR weight, not overlapping cumulative
+    resamples, and the distance is Wasserstein-1 in angstroms beside the JSD.
     """
     rng = np.random.default_rng(seed)
     h1, h2 = _halves(ub)
 
     def dist(bl_a, bl_b):
-        ta = _frame_rmsd_triangle(X[np.isin(blocks, bl_a)], n_atoms, sub, rng)
-        tb = _frame_rmsd_triangle(X[np.isin(blocks, bl_b)], n_atoms, sub, rng)
+        ia, wa = _set_weights(blocks, w, bl_a)
+        ib, wb = _set_weights(blocks, w, bl_b)
+        ta = _frame_rmsd_triangle(X, ia, wa, n_atoms, sub, rng)
+        tb = _frame_rmsd_triangle(X, ib, wb, n_atoms, sub, rng)
         e = np.linspace(min(ta.min(), tb.min()), max(ta.max(), tb.max()), 101)
         return wasserstein1(ta, tb), jsd_1d(ta, tb, e), float(np.median(ta)), float(np.median(tb))
 
-    w, j, ma, mb = dist(h1, h2)
+    w1, j, ma, mb = dist(h1, h2)
     null = [dist(*_interleaved(ub, c, rng))[:2] for c in chunks for _ in range(n_null)]
     nw, nj = np.array(null).T
-    return dict(w1=w, jsd=j, median_interframe_rmsd=[ma, mb],
+    return dict(w1=w1, jsd=j, median_interframe_rmsd=[ma, mb],
                 null_w1_median=float(np.median(nw)), null_w1_p95=float(np.quantile(nw, .95)),
                 null_jsd_median=float(np.median(nj)), null_jsd_p95=float(np.quantile(nj, .95)))
 
 
-def basin_count(P: np.ndarray, n_pc: int = 3, max_components: int = 4, seed: int = 0) -> dict:
+def basin_count(P: np.ndarray, w: Optional[np.ndarray] = None, n_pc: int = 3,
+                max_components: int = 4, n_draw: int = 5000, seed: int = 0) -> dict:
     """How many basins the equilibrated ensemble occupies.
 
-    Sarle's bimodality coefficient on each leading component is the first
-    check; if any exceeds 0.555 a Gaussian mixture on the leading components
-    is fitted and the BIC-optimal component count is returned.  One basin is
-    the common case for a ligand-bound receptor, and population tests are then
-    not applicable rather than failed.
+    Sarle's bimodality coefficient on each leading component of a weighted
+    resample is the first check; if any exceeds 0.555 a Gaussian mixture on
+    the leading components is fitted and the BIC-optimal count returned.  One
+    basin is the common case for a ligand-bound receptor, and population tests
+    are then not applicable rather than failed.
     """
-    bc = [bimodality_coefficient(P[:, k]) for k in range(min(n_pc, P.shape[1]))]
+    rng = np.random.default_rng(seed)
+    idx = np.arange(P.shape[0])
+    Z = P[_wdraw(idx, np.ones(idx.size) if w is None else w, min(n_draw, idx.size), rng)]
+    bc = [bimodality_coefficient(Z[:, k]) for k in range(min(n_pc, Z.shape[1]))]
     if max(bc) < BIMODALITY_CUTOFF:
         return dict(n_basins=1, bimodality=bc, method='bimodality coefficient')
     from sklearn.mixture import GaussianMixture
-    Z = P[:, :n_pc]
-    bics = []
-    for k in range(1, max_components + 1):
-        gm = GaussianMixture(k, n_init=3, random_state=seed).fit(Z)
-        bics.append(gm.bic(Z))
+    Zk = Z[:, :n_pc]
+    bics = [GaussianMixture(k, n_init=3, random_state=seed).fit(Zk).bic(Zk)
+            for k in range(1, max_components + 1)]
     return dict(n_basins=int(np.argmin(bics) + 1), bimodality=bc, bic=[float(b) for b in bics],
                 method='GMM BIC')
 
 
 def population_free_energies(P: np.ndarray, blocks: np.ndarray, ub: np.ndarray,
-                             n_basins: int, n_pc: int = 3, kT: float = KT_310_KCAL,
-                             min_population: float = 0.05, n_boot: int = 300,
-                             seed: int = 0) -> dict:
+                             n_basins: int, w: np.ndarray, n_pc: int = 3,
+                             kT: float = KT_310_KCAL, min_population: float = 0.05,
+                             n_boot: int = 300, seed: int = 0) -> dict:
     """Lyman-Zuckerman population test on basins, not on arbitrary cells.
 
-    Assigns every frame to one of ``n_basins`` mixture components fitted on the
-    whole equilibrated ensemble, then compares each basin's population between
-    the halves as a free-energy difference with a block-bootstrap interval.
+    A mixture with ``n_basins`` components is fitted on a weighted resample of
+    the equilibrated ensemble; each basin's weighted population is compared
+    between the halves as a free-energy difference with a block-bootstrap
+    interval.
     """
     from sklearn.mixture import GaussianMixture
     rng = np.random.default_rng(seed)
-    Z = P[np.isin(blocks, ub), :n_pc]
+    idx, ww = _set_weights(blocks, w, ub)
+    Z = P[_wdraw(idx, ww, min(5000, idx.size), rng), :n_pc]
     gm = GaussianMixture(n_basins, n_init=3, random_state=seed).fit(Z)
-    lab_all = gm.predict(P[:, :n_pc])
+    lab = gm.predict(P[:, :n_pc])
     h1, h2 = _halves(ub)
+    bp = {b: np.bincount(lab[blocks == b], weights=w[blocks == b], minlength=n_basins)
+          / w[blocks == b].sum() for b in ub}
 
     def pops(bl):
-        l = lab_all[np.isin(blocks, bl)]
-        return np.bincount(l, minlength=n_basins) / l.size
+        return np.mean([bp[b] for b in bl], axis=0)
 
     p1, p2 = pops(h1), pops(h2)
     b1 = np.array([pops(rng.choice(h1, h1.size)) for _ in range(n_boot)])
@@ -538,22 +577,29 @@ def population_free_energies(P: np.ndarray, blocks: np.ndarray, ub: np.ndarray,
                 pass_=all(abs(r['dG']) <= kT for r in rows) if rows else True)
 
 
-def drift_diagnostics(P: np.ndarray, blocks: np.ndarray, ub: np.ndarray,
+def drift_diagnostics(series: dict, blocks: np.ndarray, P: np.ndarray, w: np.ndarray,
                       train_sd: Optional[np.ndarray] = None) -> Dict[str, dict]:
-    """Per-component autocorrelation, corrected trend test, R-hat, FP error.
+    """Per-component autocorrelation, corrected trend test, R-hat, blocking error.
 
+    All on the block-mean series -- the time-ordered object -- never on frames.
     Reported, never gated: a significance test on drift becomes harder to pass
     the longer a converged run continues, so it cannot be a stopping rule.
     """
     out = {}
-    bm = np.array([P[blocks == b].mean(0) for b in ub])
-    for k in range(P.shape[1]):
+    bm = np.asarray(series['mean_pc'])
+    ub = np.asarray(series['blocks'])
+    for k in range(bm.shape[1]):
         o = ols_corrected(bm[:, k])
-        frames = P[np.isin(blocks, ub), k]
-        _, _, fp = fp_block_se(frames)
+        _, _, fp = fp_block_se(bm[:, k])
+        within = []
+        for b in ub:
+            m = blocks == b
+            wb = w[m] / w[m].sum()
+            mu = np.sum(wb * P[m, k])
+            within.append(np.sqrt(np.sum(wb * (P[m, k] - mu) ** 2)))
         d = dict(o, total_drift=o['slope'] * (ub.size - 1), rhat=rhat_split(bm[:, k]),
-                 fp_se=fp, between_block_sd=float(bm[:, k].std(ddof=1)),
-                 within_block_sd=float(np.mean([P[blocks == b, k].std() for b in ub])))
+                 fp_se=fp, between_block_sd=float(bm[:, k].std(ddof=1)) if ub.size > 1 else float('nan'),
+                 within_block_sd=float(np.mean(within)))
         if train_sd is not None:
             d['drift_over_train_sd'] = d['total_drift'] / float(train_sd[k])
         out[f'pc{k + 1}'] = d
@@ -613,19 +659,24 @@ def equilibrated_blocks(blocks: np.ndarray, b0: Optional[int] = None,
 def panel(X: np.ndarray, P: np.ndarray, blocks: np.ndarray, tol: Tolerances,
           b0: Optional[int] = None, width_fraction: float = 0.25,
           train_sd: Optional[np.ndarray] = None, seed: int = 0,
-          min_blocks: int = 2 * MIN_BLOCKS_PER_HALF) -> dict:
+          min_blocks: int = 2 * MIN_BLOCKS_PER_HALF,
+          w: Optional[np.ndarray] = None) -> dict:
     """Evaluate every gate on the equilibrated blocks and return one verdict.
 
     ``X`` superposed conserved-atom coordinates (n_frames, n_atoms, 3) in A;
     ``P`` their projections (n_frames, n_pc); ``blocks`` the block of each
-    frame.  ``b0`` is the first equilibrated block (default: the first quarter
-    is discarded).  The width gate's tolerance is ``width_fraction`` of the
-    same-state experimental RMSD.
+    frame; ``w`` per-frame MBAR weights at the target rung (any scale; they
+    are normalised within each block, and blocks weigh equally).  Without
+    ``w`` every frame in a block counts equally.  ``b0`` is the first
+    equilibrated block (default: the first quarter is discarded).  The width
+    gate's tolerance is ``width_fraction`` of the same-state experimental RMSD.
     """
     ub = equilibrated_blocks(blocks, b0)
     n_atoms = X.shape[1]
+    w = normalize_block_weights(blocks, w)
     res = dict(n_blocks_total=int(np.unique(blocks).size), b0=int(ub[0]) if ub.size else None,
                n_blocks_equilibrated=int(ub.size), n_frames=int(np.isin(blocks, ub).sum()),
+               weighted=True,
                tolerances=dict(same_state_rmsd=tol.same_state_rmsd,
                                family_same_state_rmsd=tol.family_same_state_rmsd,
                                diff_state_rmsd=tol.diff_state_rmsd,
@@ -638,21 +689,29 @@ def panel(X: np.ndarray, P: np.ndarray, blocks: np.ndarray, tol: Tolerances,
         return res
 
     eq = np.isin(blocks, ub)
-    ms = mean_structure_drift(X, blocks, ub, seed=seed)
+    series = block_series(X, P, blocks, w, ub)
+    ms = mean_structure_drift(X, blocks, ub, w, seed=seed)
     ms['tolerance'] = tol.same_state_rmsd
     ms['pass_'] = bool(ms['boot_q95'] <= tol.same_state_rmsd)
-    ss = state_stability(P, blocks, ub, tol)
-    ew = ensemble_width(X, blocks, ub, n_atoms, seed=seed)
+    ss = state_stability(P, blocks, ub, tol, w)
+    ew = ensemble_width(X, blocks, ub, n_atoms, w, seed=seed)
     ew['tolerance'] = width_fraction * tol.same_state_rmsd
     ew['pass_'] = bool(ew['w1'] <= ew['tolerance'])
-    bc = basin_count(P[eq])
+    idx, ww = _set_weights(blocks, w, ub)
+    bc = basin_count(P[idx], ww, seed=seed)
     if bc['n_basins'] > 1:
-        pf = population_free_energies(P, blocks, ub, bc['n_basins'], seed=seed)
+        pf = population_free_energies(P, blocks, ub, bc['n_basins'], w, seed=seed)
     else:
         pf = dict(basins=[], kT=KT_310_KCAL, pass_=True, not_applicable=True)
     gates = dict(mean_structure=ms, state=ss, width=ew, basins=bc, populations=pf)
     res['gates'] = gates
-    res['diagnostics'] = drift_diagnostics(P, blocks, ub, train_sd)
+    res['series'] = dict(blocks=series['blocks'],
+                         mean_pc=np.asarray(series['mean_pc'])[:, :5].tolist(),
+                         median_pc=np.asarray(series['median_pc'])[:, :5].tolist(),
+                         rmsd_to_grand_mean=series['rmsd_to_grand_mean'],
+                         ess=series['ess'])
+    res['ess_median'] = float(np.median(series['ess']))
+    res['diagnostics'] = drift_diagnostics(series, blocks, P, w, train_sd)
     failed = [g for g in ('mean_structure', 'state', 'width', 'populations')
               if not gates[g]['pass_']]
     res['failed'] = failed
@@ -661,20 +720,22 @@ def panel(X: np.ndarray, P: np.ndarray, blocks: np.ndarray, tol: Tolerances,
 
 
 def prefix_curve(X: np.ndarray, P: np.ndarray, blocks: np.ndarray, tol: Tolerances,
-                 prefixes: Sequence[int], b0_fraction: float = 0.25, **kw) -> List[dict]:
+                 prefixes: Sequence[int], b0_fraction: float = 0.25,
+                 w: Optional[np.ndarray] = None, **kw) -> List[dict]:
     """The panel as it would have read at each prefix length, in blocks.
 
-    A metric that is fit to be a stopping rule should, once it passes, keep
-    passing as the run continues; this is the check.
+    A metric fit to be a stopping rule should, once it passes, keep passing as
+    the run continues; this is the check.
     """
     out = []
     for n in prefixes:
         sel = blocks < n
         if sel.sum() == 0:
             continue
-        r = panel(X[sel], P[sel], blocks[sel], tol, b0=None, **kw) if b0_fraction is None else \
-            panel(X[sel], P[sel], blocks[sel], tol,
-                  b0=int(np.unique(blocks[sel])[int(np.floor(b0_fraction * np.unique(blocks[sel]).size))]), **kw)
+        ubn = np.unique(blocks[sel])
+        b0 = int(ubn[int(np.floor(b0_fraction * ubn.size))])
+        r = panel(X[sel], P[sel], blocks[sel], tol, b0=b0,
+                  w=None if w is None else w[sel], **kw)
         g = r.get('gates', {})
         out.append(dict(N=int(n), verdict=r['verdict'], b0=r['b0'],
                         mean_rmsd=g.get('mean_structure', {}).get('rmsd'),
@@ -690,7 +751,7 @@ def prefix_curve(X: np.ndarray, P: np.ndarray, blocks: np.ndarray, tol: Toleranc
 def format_panel(r: dict) -> str:
     t = r['tolerances']
     lines = [f"blocks {r['n_blocks_total']}  equilibrated from {r['b0']}: {r['n_blocks_equilibrated']} blocks, "
-             f"{r['n_frames']} frames",
+             f"{r['n_frames']} frames" + (f", ESS/block median {r['ess_median']:.0f}" if 'ess_median' in r else ''),
              f"tolerances: same-state RMSD {t['same_state_rmsd']:.2f} A "
              f"({'receptor ' + str(t['receptor']) + ', n=' + str(t['receptor_n']) if t['receptor_n'] else 'family median'}; "
              f"family {t['family_same_state_rmsd']:.2f}, different state {t['diff_state_rmsd']:.2f})"]
@@ -713,7 +774,7 @@ def format_panel(r: dict) -> str:
         + ('; not applicable' if pf.get('not_applicable') else
            '; ' + ', '.join(f"basin {b['basin']} dG {b['dG']:+.2f} [{b['dG_lo']:+.2f},{b['dG_hi']:+.2f}]" for b in pf['basins'])),
         f"verdict: {r['verdict']}" + (f"  (failed: {', '.join(r['failed'])})" if r['failed'] else ''),
-        "diagnostics (reported, not gated):",
+        "diagnostics on the block-mean series (reported, not gated):",
         f"  {'PC':>4} {'tau':>5} {'n_eff':>5} {'p_naive':>8} {'p_corr':>7} {'R-hat':>5} {'drift':>6} {'FP se':>6}"]
     for k, d in list(r['diagnostics'].items())[:5]:
         lines.append(f"  {k:>4} {d['tau']:>5.1f} {d['neff']:>5.0f} {d['p_naive']:>8.1e} {d['p_corr']:>7.3f} "
@@ -772,9 +833,12 @@ class LivePanel:
 
     Runs inside :meth:`FultonMarket.run` on rank 0.  Each block's conserved
     atoms for the lowest rungs are read once from the block's ``positions.npy``
-    and kept under ``<run_dir>/analysis/live_panel/``, so an evaluation costs a
-    few seconds regardless of run length and a resubmitted job resumes from the
-    cache.  The verdict must hold for ``consecutive`` blocks before the run
+    together with their reduced potentials from ``energies.npy``; MBAR over
+    those rungs gives every frame its weight in the block's 310 K ensemble, and
+    the block is the unit of time (blocks weigh equally, frames within a block
+    by MBAR weight).  All of it is kept under ``<run_dir>/analysis/live_panel/``,
+    so an evaluation costs a few seconds regardless of run length and a
+    resubmitted job resumes from the cache.  The verdict must hold for ``consecutive`` blocks before the run
     stops: a single pass at the bootstrap bound can flicker, and a stopping
     rule should not act on one.
 
@@ -953,19 +1017,41 @@ class LivePanel:
         if pos is None:
             self.printf(f'convergence panel: block {block} positions unreadable, skipped')
             return False
-        frames, states = [], []
+        # energies.npy is (iteration, replica, state) in reduced units, indexed
+        # by replica like positions.npy; the frame at positions[it, r] pairs
+        # with energies[it, r, :].
+        epath = os.path.join(d, 'energies.npy')
+        ener = np.load(epath, mmap_mode='r') if os.path.exists(epath) else None
+        K = self.n_states
+        frames, states, u = [], [], []
         for it in range(self.skip, min(st.shape[0], pos.shape[0])):
-            for s in range(self.n_states):
+            for s in range(K):
                 hit = np.where(st[it] == s)[0]
                 if hit.size:
                     frames.append(np.asarray(pos[it, hit[0]][self._atom_indices], np.float32))
                     states.append(s)
+                    if ener is not None and ener.shape[0] > it:
+                        u.append(np.asarray(ener[it, hit[0], :K], np.float64))
         del pos
         coords = (np.stack(frames) if frames
                   else np.empty((0, self._atom_indices.size, 3), np.float32))
+        states_a = np.asarray(states, np.int64)
+        if len(u) == len(frames) and frames:
+            u_a = np.stack(u)
+            w, f_k, ok = block_mbar_weights(u_a, states_a, K, target=0)
+        else:
+            u_a = np.full((len(frames), K), np.nan)
+            w, f_k, ok = block_mbar_weights(u_a, states_a, K, target=0)  # uniform over rung 0
+            ok = False
+        if not ok:
+            self.printf(f'convergence panel: block {block}: MBAR weights unavailable, '
+                        f'using the frames sampled at rung 0 uniformly')
         os.makedirs(self.frames_dir, exist_ok=True)
         tmp = path + '.tmp.npz'
-        np.savez(tmp, coords=coords, states=np.asarray(states, np.int8))
+        np.savez(tmp, coords=coords, states=states_a.astype(np.int8), u=u_a.astype(np.float32),
+                 w=w.astype(np.float64), f_k=np.asarray(f_k, np.float64),
+                 ess=np.float64(1.0 / np.sum(w ** 2)) if w.size else np.float64(0.0),
+                 weights_ok=np.bool_(ok))
         os.replace(tmp, path)
         return True
 
@@ -991,9 +1077,13 @@ class LivePanel:
                       if f.endswith('.npz') and f[:-4].isdigit())
 
     def load_frames(self, max_block: Optional[int] = None
-                    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Every cached block, or only those up to ``max_block`` (replays)."""
-        coords, blocks, states = [], [], []
+                    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Every cached block, or only those up to ``max_block`` (replays).
+
+        Returns ``(coords_nm, blocks, states, weights)``; the weights are the
+        per-block MBAR weights at rung 0, each block summing to one.
+        """
+        coords, blocks, states, weights = [], [], [], []
         for b in self.cached_blocks():
             if max_block is not None and b > max_block:
                 continue
@@ -1004,10 +1094,32 @@ class LivePanel:
             coords.append(c)
             blocks.append(np.full(c.shape[0], b, np.int64))
             states.append(d['states'].astype(np.int64))
+            w = d['w'] if 'w' in d.files else np.full(c.shape[0], 1.0 / c.shape[0])
+            weights.append(np.asarray(w, np.float64))
         if not coords:
             n = 0 if self._atom_indices is None else self._atom_indices.size
-            return (np.empty((0, n, 3), np.float32), np.empty(0, np.int64), np.empty(0, np.int64))
-        return np.concatenate(coords), np.concatenate(blocks), np.concatenate(states)
+            return (np.empty((0, n, 3), np.float32), np.empty(0, np.int64),
+                    np.empty(0, np.int64), np.empty(0, np.float64))
+        return (np.concatenate(coords), np.concatenate(blocks), np.concatenate(states),
+                np.concatenate(weights))
+
+    def weights_report(self) -> dict:
+        """Per-block MBAR health: ESS, rung shares of the weight, solver failures."""
+        rows = []
+        for b in self.cached_blocks():
+            d = np.load(self._block_path(b))
+            if 'w' not in d.files or d['coords'].shape[0] == 0:
+                continue
+            w, st = d['w'], d['states'].astype(int)
+            rows.append(dict(block=int(b), ess=float(1.0 / np.sum(w ** 2)),
+                             rung_share=np.bincount(st, weights=w, minlength=self.n_states)[:self.n_states].tolist(),
+                             ok=bool(d['weights_ok']) if 'weights_ok' in d.files else True))
+        if not rows:
+            return {}
+        share = np.mean([r['rung_share'] for r in rows], axis=0)
+        return dict(n_blocks=len(rows), ess_median=float(np.median([r['ess'] for r in rows])),
+                    ess_p10=float(np.quantile([r['ess'] for r in rows], .1)),
+                    rung_share_mean=share.tolist(), n_failed=sum(not r['ok'] for r in rows))
 
     # -- evaluation -----------------------------------------------------------
 
@@ -1025,16 +1137,17 @@ class LivePanel:
         return {'history': []}
 
     def evaluate(self, sim_no: Optional[int] = None, past_minimum: bool = True,
-                 max_block: Optional[int] = None) -> dict:
+                 max_block: Optional[int] = None, persist: bool = True) -> dict:
         """Run the panel on every cached block and update the consecutive-pass streak.
 
         Re-evaluating the same ``sim_no`` replaces that block's entry rather
         than extending the streak, so a restarted evaluation cannot stop a run
         that a single pass would not have.  ``max_block`` restricts the frames
         to blocks up to that index, which replays the rule as it would have
-        read partway through a finished run.
+        read partway through a finished run; ``persist=False`` leaves the live
+        state file alone, for offline use on a run directory.
         """
-        coords, blocks, _ = self.load_frames(max_block=max_block)
+        coords, blocks, _, w = self.load_frames(max_block=max_block)
         tol = self.tolerances
         if sim_no is None:
             sim_no = int(blocks.max()) if blocks.size else -1
@@ -1048,10 +1161,10 @@ class LivePanel:
             ub = np.unique(blocks)
             b0 = int(ub[int(np.floor(self.b0_fraction * ub.size))])
             r = panel(X, P, blocks, tol, b0=b0, width_fraction=self.width_fraction,
-                      train_sd=self.train_sd, min_blocks=self.min_blocks)
+                      train_sd=self.train_sd, min_blocks=self.min_blocks, w=w)
 
         converged = r['verdict'] == 'CONVERGED'
-        state = self._load_state()
+        state = self._load_state() if persist else {'history': []}
         hist = [h for h in state.get('history', []) if h.get('block') != int(sim_no)]
         g = r.get('gates', {})
         entry = dict(block=int(sim_no), verdict=r['verdict'], n_blocks=r['n_blocks_total'],
@@ -1066,6 +1179,7 @@ class LivePanel:
                      w1=g.get('width', {}).get('w1'),
                      w1_tolerance=g.get('width', {}).get('tolerance'),
                      n_basins=g.get('basins', {}).get('n_basins'),
+                     ess_median=r.get('ess_median'),
                      failed=r.get('failed', []))
         hist.append(entry)
         hist.sort(key=lambda h: h['block'])
@@ -1077,12 +1191,13 @@ class LivePanel:
                 break
         entry['streak'] = streak
         entry['stop'] = bool(past_minimum and converged and streak >= self.consecutive)
-        state = {'history': hist, 'streak': streak, 'consecutive': self.consecutive}
-        os.makedirs(self.analysis_dir, exist_ok=True)
-        with open(self._state_path(), 'w') as fh:
-            json.dump(state, fh, indent=1)
-        with open(os.path.join(self.frames_dir, f'eval_{int(sim_no):04d}.json'), 'w') as fh:
-            json.dump(r, fh, indent=1, default=float)
+        if persist:
+            state = {'history': hist, 'streak': streak, 'consecutive': self.consecutive}
+            os.makedirs(self.analysis_dir, exist_ok=True)
+            with open(self._state_path(), 'w') as fh:
+                json.dump(state, fh, indent=1)
+            with open(os.path.join(self.frames_dir, f'eval_{int(sim_no):04d}.json'), 'w') as fh:
+                json.dump(r, fh, indent=1, default=float)
         return dict(entry, full=r)
 
     def report(self, e: dict) -> None:
@@ -1094,6 +1209,9 @@ class LivePanel:
         self.printf(f"  {'Convergence Panel (block ' + str(e['block']) + ')':^{width}}")
         self.printf('=' * (width + 12))
         self.printf(f"  [{pf(e['past_minimum'])}]  Past minimum simulation fraction")
+        if e.get('ess_median') is not None:
+            self.printf(f"          {r['n_blocks_equilibrated']} equilibrated blocks, per-block MBAR "
+                        f"weights at rung 0, ESS/block median {e['ess_median']:.0f}")
         if r['verdict'] == 'INSUFFICIENT':
             self.printf(f"  [FAIL]  {r.get('reason', 'insufficient data')}")
         else:
@@ -1121,7 +1239,7 @@ class LivePanel:
         if 'diagnostics' in r:
             d = r['diagnostics']
             top = list(d.items())[:3]
-            self.printf('  diagnostics: ' + '; '.join(
+            self.printf('  diagnostics (block-mean series): ' + '; '.join(
                 f"{k} tau {v['tau']:.1f} n_eff {v['neff']:.0f} p_corr {v['p_corr']:.3f} "
                 f"R-hat {v['rhat']:.2f}" for k, v in top))
         self.printf('=' * (width + 12))

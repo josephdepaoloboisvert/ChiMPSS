@@ -155,7 +155,7 @@ def test_mean_structure_drift_stationary_is_at_the_noise_floor():
     rng = np.random.default_rng(8)
     X, P, blocks = synth_ensemble(80, 20, 50, rng)
     ub = cp.equilibrated_blocks(blocks, 0)
-    r = cp.mean_structure_drift(X, blocks, ub, n_boot=50, n_null=4)
+    r = cp.mean_structure_drift(X, blocks, ub, cp.normalize_block_weights(blocks), n_boot=50, n_null=4)
     assert r['rmsd'] < 0.3
     assert r['rmsd'] < 3 * r['null_p95'] + 0.1
 
@@ -164,7 +164,7 @@ def test_mean_structure_drift_detects_a_planted_shift():
     rng = np.random.default_rng(9)
     X, P, blocks = synth_ensemble(80, 20, 50, rng, drift_per_block=0.02)   # 1.6 A over the run
     ub = cp.equilibrated_blocks(blocks, 0)
-    r = cp.mean_structure_drift(X, blocks, ub, n_boot=50, n_null=4)
+    r = cp.mean_structure_drift(X, blocks, ub, cp.normalize_block_weights(blocks), n_boot=50, n_null=4)
     # 1.6 A of drift across the run puts the half means ~0.8 A apart, above the
     # 0.69 A experimental tolerance.  (The interleaved floor is not a clean
     # reference under a monotone drift -- chunks carry the drift too -- which
@@ -177,7 +177,7 @@ def test_state_stability_passes_within_one_state():
     rng = np.random.default_rng(10)
     X, P, blocks = synth_ensemble(80, 20, 50, rng)
     ub = cp.equilibrated_blocks(blocks, 0)
-    r = cp.state_stability(P, blocks, ub, make_tol())
+    r = cp.state_stability(P, blocks, ub, make_tol(), cp.normalize_block_weights(blocks))
     assert r['same_state'] and r['state'] == 'Intermediate' and r['pass_']
 
 
@@ -187,7 +187,7 @@ def test_state_stability_fails_when_the_ensemble_crosses_states():
     P = P.copy()
     P[blocks >= 40, 0] += 12.0                  # second half sits at the Active centroid
     ub = cp.equilibrated_blocks(blocks, 0)
-    r = cp.state_stability(P, blocks, ub, make_tol())
+    r = cp.state_stability(P, blocks, ub, make_tol(), cp.normalize_block_weights(blocks))
     assert not r['same_state'] and not r['pass_']
 
 
@@ -199,7 +199,7 @@ def test_state_stability_thin_state_borrows_the_tighter_spread():
     rng = np.random.default_rng(12)
     X, P, blocks = synth_ensemble(80, 20, 50, rng)
     ub = cp.equilibrated_blocks(blocks, 0)
-    r = cp.state_stability(P, blocks, ub, tol)
+    r = cp.state_stability(P, blocks, ub, tol, cp.normalize_block_weights(blocks))
     assert r['tolerance'][0] == pytest.approx(2.0)
 
 
@@ -207,11 +207,12 @@ def test_ensemble_width_stationary_and_widened():
     rng = np.random.default_rng(13)
     X, P, blocks = synth_ensemble(80, 20, 50, rng)
     ub = cp.equilibrated_blocks(blocks, 0)
-    r0 = cp.ensemble_width(X, blocks, ub, 50, sub=150, n_null=3)
+    w = cp.normalize_block_weights(blocks)
+    r0 = cp.ensemble_width(X, blocks, ub, 50, w, sub=150, n_null=3)
     X2 = X.copy()
     sel = blocks >= 40
     X2[sel] = X2[sel].mean(0) + 1.6 * (X2[sel] - X2[sel].mean(0))   # second half 60 % wider
-    r1 = cp.ensemble_width(X2, blocks, ub, 50, sub=150, n_null=3)
+    r1 = cp.ensemble_width(X2, blocks, ub, 50, w, sub=150, n_null=3)
     assert r0['w1'] < r0['null_w1_p95'] * 2 + 0.05
     assert r1['w1'] > 3 * r0['w1']
 
@@ -234,13 +235,14 @@ def test_population_free_energies_pass_and_fail():
     # stable 50/50 two-basin ensemble
     P[:, 0] += np.where(rng.random(blocks.size) < 0.5, -4, 4)
     ub = cp.equilibrated_blocks(blocks, 0)
-    ok = cp.population_free_energies(P, blocks, ub, 2, n_boot=50)
+    w = cp.normalize_block_weights(blocks)
+    ok = cp.population_free_energies(P, blocks, ub, 2, w, n_boot=50)
     assert ok['pass_']
     # populations 80/20 -> 20/80 between halves: dG ~ 0.85 kcal/mol
     P2 = rng.normal(size=(blocks.size, 10))
     frac = np.where(blocks < 40, 0.8, 0.2)
     P2[:, 0] += np.where(rng.random(blocks.size) < frac, -4, 4)
-    bad = cp.population_free_energies(P2, blocks, ub, 2, n_boot=50)
+    bad = cp.population_free_energies(P2, blocks, ub, 2, w, n_boot=50)
     assert not bad['pass_']
     assert all(abs(b['dG']) > cp.KT_310_KCAL for b in bad['basins'])
 
@@ -367,8 +369,16 @@ def write_block(run, block, coords_nm, n_it, n_rep, n_atoms_total, rng, states=N
             pos[it, r] = coords_nm[it, r]
     pos.tofile(d / 'positions.npy')                    # no NPY header, as in production
     np.save(d / 'states.npy', st)
-    np.save(d / 'temperatures.npy', np.linspace(310, 320, n_rep))
-    for name in ('velocities.npy', 'box_vectors.npy', 'energies.npy'):
+    temps = np.linspace(310, 320, n_rep)
+    np.save(d / 'temperatures.npy', temps)
+    # energies.npy: (iteration, replica, state) reduced potentials, beta_k * U,
+    # for a potential energy that does not depend on the rung (so every rung
+    # samples the same conformational ensemble and MBAR weights stay benign)
+    kB = 0.0083144626
+    beta = 1.0 / (kB * temps)
+    U = rng.normal(-1.0e5, 300.0, (n_it, n_rep))
+    np.save(d / 'energies.npy', (U[:, :, None] * beta[None, None, :]).astype(np.float32))
+    for name in ('velocities.npy', 'box_vectors.npy'):
         np.save(d / name, np.zeros(1))
 
 
@@ -404,7 +414,7 @@ def live_tol(model, run, n_pc=10):
                       n_states=3, min_blocks=16, n_atoms_total=50)
     lp.prepare()
     lp.ingest_all()
-    coords, blocks, _ = lp.load_frames()
+    coords, blocks, _, _ = lp.load_frames()
     P = cp.project_superposed(cp.superpose_frames(coords, model), model, n_pc)
     tol.centroids['Active'][:2] = P[:, :2].mean(0)
     tol.centroids['Inactive'][:] = tol.centroids['Active'] - 20
@@ -510,3 +520,105 @@ def test_live_report_prints_every_gate(tmp_path, capsys):
     for word in ('Convergence Panel', 'Mean-structure drift', 'State stability',
                  'Ensemble width', 'Basin populations', 'consecutive blocks', 'verdict'):
         assert word in out
+
+
+# ---------------------------------------------------------------------------
+# weights: per-block MBAR, block normalisation, weighted statistics
+# ---------------------------------------------------------------------------
+
+def test_block_mbar_weights_sum_to_one_and_favour_the_target_rung():
+    rng = np.random.default_rng(30)
+    n_it, K = 19, 5
+    temps = 310 + 0.57 * np.arange(K)
+    beta = 1.0 / (0.0083144626 * temps)
+    # a potential whose mean rises with rung, as a real ladder's does
+    states = np.repeat(np.arange(K), n_it)
+    U = -1.0e5 + 40.0 * states + rng.normal(0, 25, states.size)
+    u = U[:, None] * beta[None, :]
+    w, f_k, ok = cp.block_mbar_weights(u, states, K, target=0)
+    assert ok and w.shape == (states.size,) and w.sum() == pytest.approx(1.0)
+    share = np.bincount(states, weights=w, minlength=K)
+    assert share[0] > share[1] > share[2]            # weight concentrates on the low rungs
+    assert 1.0 < 1.0 / np.sum(w ** 2) <= states.size
+
+
+def test_block_mbar_weights_uniform_when_rungs_are_identical():
+    n_it, K = 10, 3
+    states = np.repeat(np.arange(K), n_it)
+    u = np.tile(np.linspace(-5, 5, states.size)[:, None], (1, K))   # same u at every rung
+    w, _, ok = cp.block_mbar_weights(u, states, K)
+    assert ok
+    assert np.allclose(w, 1.0 / states.size, atol=1e-6)
+
+
+def test_block_mbar_weights_fall_back_without_target_samples():
+    states = np.array([1, 1, 2, 2])
+    w, _, ok = cp.block_mbar_weights(np.zeros((4, 3)), states, 3, target=0)
+    assert not ok and w.sum() == pytest.approx(1.0)
+
+
+def test_normalize_block_weights_sums_to_one_per_block():
+    blocks = np.repeat([3, 4, 5], [5, 7, 2])
+    w = cp.normalize_block_weights(blocks, np.arange(1, 15, dtype=float))
+    for b in (3, 4, 5):
+        assert w[blocks == b].sum() == pytest.approx(1.0)
+    u = cp.normalize_block_weights(blocks)
+    assert np.allclose(u[blocks == 3], 0.2)
+
+
+def test_weighted_mean_structure_drift_follows_the_weights():
+    """Two conformers per block; weighting one of them out of the second half
+    must show up as drift that uniform weights hide."""
+    rng = np.random.default_rng(31)
+    n_blocks, n_atoms = 40, 20
+    a = rng.normal(0, 5, (n_atoms, 3)); b = a.copy(); b[:, 0] += 2.0
+    X, blocks, w = [], [], []
+    for blk in range(n_blocks):
+        for conf in (a, b):
+            for _ in range(5):
+                X.append(conf + rng.normal(0, 0.05, a.shape)); blocks.append(blk)
+                w.append(1.0 if (conf is a or blk < 20) else 1e-3)
+    X, blocks, w = np.array(X), np.array(blocks), np.array(w)
+    ub = np.unique(blocks)
+    uni = cp.mean_structure_drift(X, blocks, ub, cp.normalize_block_weights(blocks), n_boot=20, n_null=2)
+    wtd = cp.mean_structure_drift(X, blocks, ub, cp.normalize_block_weights(blocks, w), n_boot=20, n_null=2)
+    assert uni['rmsd'] < 0.1
+    assert wtd['rmsd'] > 0.8
+
+
+def test_block_series_gives_one_row_per_block_with_ess():
+    rng = np.random.default_rng(32)
+    blocks = np.repeat(np.arange(6), 10)
+    X = rng.normal(size=(60, 4, 3)); P = rng.normal(size=(60, 3))
+    w = cp.normalize_block_weights(blocks, rng.random(60))
+    s = cp.block_series(X, P, blocks, w)
+    assert s['mean_pc'].shape == (6, 3) and s['median_pc'].shape == (6, 3)
+    assert len(s['ess']) == 6 and all(1.0 <= e <= 10.0 for e in s['ess'])
+    assert s['mean_structure'].shape == (6, 4, 3)
+
+
+def test_live_ingest_stores_mbar_weights(tmp_path):
+    model = synth_model()
+    run = synth_run(tmp_path, 3, model)
+    lp = make_live(run, model, make_tol())
+    lp.prepare(); lp.ingest(0)
+    d = np.load(lp._block_path(0))
+    assert 'w' in d.files and d['w'].sum() == pytest.approx(1.0)
+    assert d['u'].shape == (d['coords'].shape[0], 3)
+    assert bool(d['weights_ok'])
+    rep = lp.weights_report()
+    assert rep['n_blocks'] == 1 and 1.0 < rep['ess_median'] <= 12
+    coords, blocks, states, w = lp.load_frames()
+    assert w.shape == (coords.shape[0],) and w.sum() == pytest.approx(1.0)
+
+
+def test_live_evaluate_without_persist_leaves_state_untouched(tmp_path):
+    model = synth_model()
+    run = synth_run(tmp_path, 24, model)
+    tol = live_tol(model, run)
+    lp = make_live(run, model, tol, consecutive=1)
+    lp.prepare(); lp.ingest_all()
+    r = lp.evaluate(sim_no=23, persist=False)
+    assert r['verdict'] == 'CONVERGED'
+    assert not (run / 'analysis' / cp.LivePanel.STATE).exists()
+    assert 'series' in r['full'] and len(r['full']['series']['blocks']) == r['full']['n_blocks_equilibrated']
