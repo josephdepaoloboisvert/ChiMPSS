@@ -156,3 +156,61 @@ def test_gate_threshold_separates_real_collapsed_from_real_healthy():
     with pytest.raises(MBARWeightsDegenerate):
         _run(_collapsed_column(), min_ess=25)
     assert _run(_healthy_column(), min_ess=25) is not None
+
+
+# ---------------------------------------------------------------------------
+# compute_MBAR_weights: solver-protocol retry
+# ---------------------------------------------------------------------------
+from unittest import mock
+
+from chimpss.fultonmarket import utils as U
+
+class _FakeMBAR:
+    """Stands in for pymbar.MBAR: warns like pymbar when told to fail."""
+    calls = []
+
+    def __init__(self, u_kln, N_k, initialize='BAR', solver_protocol=None):
+        import warnings
+        _FakeMBAR.calls.append(solver_protocol)
+        fail_default = getattr(_FakeMBAR, 'fail_default', False)
+        fail_adaptive = getattr(_FakeMBAR, 'fail_adaptive', False)
+        if (solver_protocol is None and fail_default) or (solver_protocol is not None and fail_adaptive):
+            warnings.warn('WARNING: Did not converge to within specified tolerance.')
+        self._n = u_kln.shape[1]; self._k = u_kln.shape[0]
+
+    def weights(self):
+        return np.full((self._n, self._k), 1.0 / self._n)
+
+
+def _reset_fake(fail_default=False, fail_adaptive=False):
+    _FakeMBAR.calls = []
+    _FakeMBAR.fail_default = fail_default
+    _FakeMBAR.fail_adaptive = fail_adaptive
+
+
+def test_compute_mbar_weights_uses_default_protocol_when_it_converges():
+    _reset_fake()
+    with mock.patch.object(U, 'MBAR', _FakeMBAR):
+        W = U.compute_MBAR_weights(np.zeros((3, 12)), np.array([4, 4, 4]))
+    assert W.shape == (12, 3)
+    assert _FakeMBAR.calls == [None]
+
+
+def test_compute_mbar_weights_retries_with_adaptive_solver():
+    """The default protocol's non-convergence is a warning in pymbar; the
+    guard must notice it and retry rather than return the uniform column."""
+    _reset_fake(fail_default=True)
+    msgs = []
+    with mock.patch.object(U, 'MBAR', _FakeMBAR):
+        W = U.compute_MBAR_weights(np.zeros((3, 12)), np.array([4, 4, 4]), _printf=msgs.append)
+    assert W.shape == (12, 3)
+    assert _FakeMBAR.calls == [None, U.ADAPTIVE_PROTOCOL]
+    assert any('retrying' in m for m in msgs)
+
+
+def test_compute_mbar_weights_raises_when_both_protocols_fail():
+    _reset_fake(fail_default=True, fail_adaptive=True)
+    with mock.patch.object(U, 'MBAR', _FakeMBAR):
+        with pytest.raises(U.MBARWeightsDegenerate):
+            U.compute_MBAR_weights(np.zeros((3, 12)), np.array([4, 4, 4]))
+    assert len(_FakeMBAR.calls) == 2
