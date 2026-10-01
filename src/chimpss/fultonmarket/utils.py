@@ -458,49 +458,87 @@ def resample_with_MBAR(objs: List, u_kln: np.array, N_k: np.array, size: int, re
 
 
 # pymbar's default solver protocol tries scipy's ``hybr`` root-finder first and
-# hands its result to the adaptive solver. On 120 unknowns (the NTSR1 rep3
-# ladder) ``hybr`` wandered to a point with gradient norm ~150 from which the
-# adaptive stage could not move (step exactly zero for 10,000 iterations), and
-# pymbar returned a uniform weight column without raising. The adaptive solver
-# alone, from the BAR initialisation, converged on the same data in seconds.
+# hands its result to the adaptive solver. On small pools -- 7-14 samples per
+# state on NTSR1 rep3's 120-rung ladder, and 9-36 per state on rep0's 110 --
+# ``hybr`` wanders to a point with a large gradient from which the adaptive
+# stage cannot move, and pymbar returns a weight matrix whose columns do not
+# sum to one (ESS of 470,497 for 3,960 samples; 0.1 for 990) without raising:
+# its diagnostics go to the ``logging`` module, not ``warnings``. The adaptive
+# solver alone, from the BAR initialisation, converged on every pool tested in
+# about a second, so it goes first and the default protocol is the fallback.
 ADAPTIVE_PROTOCOL = (dict(method='adaptive', options=dict(maximum_iterations=10000)),)
 _NONCONVERGENCE_MARKERS = ('Did not converge', 'No solution found', 'Failed to reach a solution')
 
 
+def mbar_weights_are_sane(W, atol: float = 1e-6) -> bool:
+    """Every column a probability vector, and an ESS no larger than the sample count.
+
+    A solve that did not converge still returns an array; what it cannot do is
+    return one whose columns sum to one with an effective sample size between
+    1 and n. Checking the result is independent of how pymbar chose to report
+    the failure.
+    """
+    W = np.asarray(W, dtype=np.float64)
+    if W.ndim != 2 or W.size == 0 or not np.all(np.isfinite(W)) or np.any(W < -atol):
+        return False
+    if not np.allclose(W.sum(axis=0), 1.0, atol=atol):
+        return False
+    ess = 1.0 / np.sum(W ** 2, axis=0)
+    return bool(np.all(ess >= 1.0 - 1e-6) and np.all(ess <= W.shape[0] + 1e-6))
+
+
 def _solve_mbar(u_kln, N_k, solver_protocol=None):
-    """One MBAR solve; returns ``(mbar, converged)`` using pymbar's own warnings."""
+    """One MBAR solve; returns ``(W, converged)``.
+
+    Convergence is judged from the weights (:func:`mbar_weights_are_sane`) and
+    from pymbar's own messages, captured from both the ``warnings`` module and
+    the ``pymbar`` logger, since pymbar 4 uses the latter.
+    """
+    import logging
     import warnings
+
+    records = []
+
+    class _Catch(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    handler = _Catch()
+    logger = logging.getLogger('pymbar')
     kw = {} if solver_protocol is None else dict(solver_protocol=solver_protocol)
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter('always')
-        mbar = MBAR(u_kln, N_k, initialize='BAR', **kw)
-    converged = not any(any(m in str(w.message) for m in _NONCONVERGENCE_MARKERS) for w in caught)
-    return mbar, converged
+    logger.addHandler(handler)
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            mbar = MBAR(u_kln, N_k, initialize='BAR', **kw)
+            W = np.asarray(mbar.weights())
+    finally:
+        logger.removeHandler(handler)
+    messages = records + [str(w.message) for w in caught]
+    flagged = any(any(m in msg for m in _NONCONVERGENCE_MARKERS) for msg in messages)
+    return W, (not flagged) and mbar_weights_are_sane(W)
 
 
 def compute_MBAR_weights(u_kln, N_k, _printf=None):
-    """MBAR weights ``W_nk``, retrying with the adaptive solver when the default fails.
+    """MBAR weights ``W_nk`` from the adaptive solver, the default protocol as fallback.
 
-    pymbar signals non-convergence with warnings, not exceptions, and its
-    fallback return is a uniform column -- which downstream reads as a valid
-    (unweighted) resample. That is what happened on every block of NTSR1 rep3
-    until this guard: the default protocol failed where the adaptive protocol
-    alone converges. When neither converges, raise
-    :class:`MBARWeightsDegenerate` so the caller skips this block's comparison
-    instead of comparing uniform mixtures of every temperature.
+    Raises :class:`MBARWeightsDegenerate` when neither protocol yields a sane
+    weight matrix, so the caller skips this block's convergence comparison
+    instead of comparing uniform mixtures of every temperature -- which is what
+    the first three blocks of NTSR1 rep3 did before this guard.
     """
     log = _printf or (lambda *a, **k: None)
-    mbar, ok = _solve_mbar(u_kln, N_k)
+    W, ok = _solve_mbar(u_kln, N_k, ADAPTIVE_PROTOCOL)
     if not ok:
-        log('MBAR: default solver protocol did not converge; retrying with the '
-            'adaptive solver from the BAR initialisation.')
-        mbar, ok = _solve_mbar(u_kln, N_k, ADAPTIVE_PROTOCOL)
+        log('MBAR: adaptive solver did not converge; retrying with the default protocol.')
+        W, ok = _solve_mbar(u_kln, N_k, None)
     if not ok:
         raise MBARWeightsDegenerate(
-            'MBAR did not converge under the default or the adaptive solver protocol '
+            'MBAR did not converge under the adaptive or the default solver protocol '
             f'({u_kln.shape[0]} states, {int(np.sum(N_k))} samples). This block cannot be '
             'importance-resampled; skipping its convergence comparison.')
-    return mbar.weights()
+    return W
+
 
 def detect_PC_equil(pc, reduced_cartesian):
     t0, _, _ = detect_equilibration(reduced_cartesian[:,pc])

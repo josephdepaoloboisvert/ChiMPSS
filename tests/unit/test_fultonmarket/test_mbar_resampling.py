@@ -166,20 +166,23 @@ from unittest import mock
 from chimpss.fultonmarket import utils as U
 
 class _FakeMBAR:
-    """Stands in for pymbar.MBAR: warns like pymbar when told to fail."""
+    """Stands in for pymbar.MBAR.  In failure mode it does what pymbar does:
+    logs the complaint to the 'pymbar' logger and returns a weight matrix
+    whose columns do not sum to one."""
     calls = []
 
     def __init__(self, u_kln, N_k, initialize='BAR', solver_protocol=None):
-        import warnings
+        import logging
         _FakeMBAR.calls.append(solver_protocol)
-        fail_default = getattr(_FakeMBAR, 'fail_default', False)
-        fail_adaptive = getattr(_FakeMBAR, 'fail_adaptive', False)
-        if (solver_protocol is None and fail_default) or (solver_protocol is not None and fail_adaptive):
-            warnings.warn('WARNING: Did not converge to within specified tolerance.')
-        self._n = u_kln.shape[1]; self._k = u_kln.shape[0]
+        self._fail = ((solver_protocol is not None and getattr(_FakeMBAR, 'fail_adaptive', False))
+                      or (solver_protocol is None and getattr(_FakeMBAR, 'fail_default', False)))
+        if self._fail:
+            logging.getLogger('pymbar').warning('WARNING: Did not converge to within specified tolerance.')
+        self._n, self._k = u_kln.shape[1], u_kln.shape[0]
 
     def weights(self):
-        return np.full((self._n, self._k), 1.0 / self._n)
+        W = np.full((self._n, self._k), 1.0 / self._n)
+        return W * 1e-3 if self._fail else W
 
 
 def _reset_fake(fail_default=False, fail_adaptive=False):
@@ -188,24 +191,48 @@ def _reset_fake(fail_default=False, fail_adaptive=False):
     _FakeMBAR.fail_adaptive = fail_adaptive
 
 
-def test_compute_mbar_weights_uses_default_protocol_when_it_converges():
+def test_mbar_weights_sanity_check():
+    good = np.full((12, 3), 1.0 / 12)
+    assert U.mbar_weights_are_sane(good)
+    assert not U.mbar_weights_are_sane(good * 1e-3)          # columns do not sum to one
+    assert not U.mbar_weights_are_sane(np.where(np.eye(12, 3) > 0, np.nan, good))
+    bad = good.copy(); bad[0, 0] = -0.5; bad[1, 0] = 0.5 + 1 / 12
+    assert not U.mbar_weights_are_sane(bad)                 # negative weight
+
+
+def test_compute_mbar_weights_uses_adaptive_protocol_first():
     _reset_fake()
     with mock.patch.object(U, 'MBAR', _FakeMBAR):
         W = U.compute_MBAR_weights(np.zeros((3, 12)), np.array([4, 4, 4]))
     assert W.shape == (12, 3)
-    assert _FakeMBAR.calls == [None]
+    assert _FakeMBAR.calls == [U.ADAPTIVE_PROTOCOL]
 
 
-def test_compute_mbar_weights_retries_with_adaptive_solver():
-    """The default protocol's non-convergence is a warning in pymbar; the
-    guard must notice it and retry rather than return the uniform column."""
-    _reset_fake(fail_default=True)
+def test_compute_mbar_weights_falls_back_to_default_protocol():
+    """pymbar reports failure through logging and returns an unnormalised
+    matrix; both must be caught, and the default protocol tried next."""
+    _reset_fake(fail_adaptive=True)
     msgs = []
     with mock.patch.object(U, 'MBAR', _FakeMBAR):
         W = U.compute_MBAR_weights(np.zeros((3, 12)), np.array([4, 4, 4]), _printf=msgs.append)
-    assert W.shape == (12, 3)
-    assert _FakeMBAR.calls == [None, U.ADAPTIVE_PROTOCOL]
+    assert W.shape == (12, 3) and np.allclose(W.sum(axis=0), 1.0)
+    assert _FakeMBAR.calls == [U.ADAPTIVE_PROTOCOL, None]
     assert any('retrying' in m for m in msgs)
+
+
+def test_compute_mbar_weights_detects_failure_from_weights_alone():
+    """Even with no message at all, a matrix whose columns do not sum to one
+    is a failed solve."""
+    class _Silent(_FakeMBAR):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+        def weights(self):
+            return np.full((self._n, self._k), 1.0 / self._n) * (1e-3 if self._fail else 1.0)
+    _reset_fake(fail_adaptive=True, fail_default=True)
+    import logging
+    with mock.patch.object(U, 'MBAR', _Silent), mock.patch.object(logging.getLogger('pymbar'), 'warning', lambda *a, **k: None):
+        with pytest.raises(U.MBARWeightsDegenerate):
+            U.compute_MBAR_weights(np.zeros((3, 12)), np.array([4, 4, 4]))
 
 
 def test_compute_mbar_weights_raises_when_both_protocols_fail():
