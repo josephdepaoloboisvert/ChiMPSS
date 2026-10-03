@@ -1047,7 +1047,10 @@ class LivePanel:
             self.printf(f'convergence panel: block {block}: MBAR weights unavailable, '
                         f'using the frames sampled at rung 0 uniformly')
         os.makedirs(self.frames_dir, exist_ok=True)
-        tmp = path + '.tmp.npz'
+        # per-process temporary name: the live run and an offline builder can
+        # ingest the same block concurrently, and a shared name would let one
+        # replace the other's half-written file
+        tmp = f'{path}.{os.getpid()}.tmp.npz'
         np.savez(tmp, coords=coords, states=states_a.astype(np.int8), u=u_a.astype(np.float32),
                  w=w.astype(np.float64), f_k=np.asarray(f_k, np.float64),
                  ess=np.float64(1.0 / np.sum(w ** 2)) if w.size else np.float64(0.0),
