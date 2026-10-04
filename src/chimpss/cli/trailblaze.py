@@ -54,6 +54,8 @@ def parse_args(argv=None):
     w.add_argument('--tb_max_sample_ps', default=400.0, type=float, help='Default 400.')
     w.add_argument('--tb_neff_min', default=50, type=int, help='Default 50.')
     w.add_argument('--tb_max_rungs', default=400, type=int, help='Default 400.')
+    w.add_argument('--tb_sigma_window', default=5, type=int,
+                   help='Rungs over which sigma_H is pooled for the step (1 = each rung alone). Default 5.')
     w.add_argument('--tb_force', action='store_true',
                    help='Resume a record written with different settings.')
     w.add_argument('--protein-name', default=None, type=str)
@@ -81,7 +83,7 @@ def walk_settings(args):
                 first_equil_ps=args.tb_first_equil_ps, equil_ps=args.tb_equil_ps,
                 sample_ps=args.tb_sample_ps, sample_interval_ps=args.tb_sample_interval_ps,
                 max_sample_ps=args.tb_max_sample_ps, neff_min=args.tb_neff_min,
-                max_rungs=args.tb_max_rungs, force=args.tb_force)
+                max_rungs=args.tb_max_rungs, sigma_window=args.tb_sigma_window, force=args.tb_force)
 
 
 def _walk(args):

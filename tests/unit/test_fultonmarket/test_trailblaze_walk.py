@@ -194,3 +194,25 @@ def test_trailblazer_validates_arguments():
         tb.Trailblazer(FakeSampler(), 367.0, 310.0)
     with pytest.raises(ValueError):
         tb.Trailblazer(FakeSampler(), 310.0, 367.0, target_acc=0.4, min_acc=0.5)
+
+
+def test_pooled_sigma_tames_noisy_rung_estimates(tmp_path):
+    """With 40 samples per rung the single-rung sigma scatters ~11 %; pooling five rungs must
+    make the realised spacing markedly more uniform than stepping on each rung's own sigma."""
+    def walk(window, seed):
+        sampler = FakeSampler(seed=seed, n=40)
+        rec = tb.Trailblazer(sampler, 310.0, 340.0, target_acc=0.4, min_acc=0.05, max_acc=0.95,
+                             sigma_window=window, printf=lambda *_: None).run(make_seed())
+        T = rec.temperatures
+        ratios = T[1:-2] / T[:-3]
+        return np.std(ratios) / np.mean(ratios), rec
+    cv_single = np.mean([walk(1, s)[0] for s in range(3)])
+    cv_pooled, rec = [walk(5, s) for s in range(3)][0]
+    assert cv_pooled < 0.6 * cv_single
+    assert rec.inputs['sigma_window'] == 5
+    assert all(r.sigma_step is not None for r in rec.rungs)
+    # the pooled value is the neff-weighted pooled variance of the trailing window
+    r = rec.rungs[7]
+    w = rec.rungs[3:8]
+    expect = np.sqrt(sum(x.neff * x.sigma ** 2 for x in w) / sum(x.neff for x in w))
+    assert r.sigma_step == pytest.approx(expect)
