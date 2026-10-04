@@ -57,7 +57,8 @@ __all__ = [
     'KB', 'beta', 'target_spacing', 'predicted_acceptance', 'pair_spacing', 'sigma_from_cv',
     'next_temperature', 'pair_acceptance', 'stationary_window', 'ladder_from_sigma',
     'load_ladder_file', 'Seed', 'Rung', 'TrailblazeRecord', 'SeedStore', 'Trailblazer',
-    'OpenMMRungSampler', 'RECORD_NAME', 'LADDER_NAME', 'SEED_DIR',
+    'OpenMMRungSampler', 'RECORD_NAME', 'LADDER_NAME', 'SEED_DIR', 'LADDER_MODES',
+    'SAMPLER_KEYS', 'WALK_KEYS', 'split_kwargs',
 ]
 
 #: Boltzmann constant in kJ/(mol K); equals ``openmmtools.constants.kB``.
@@ -69,6 +70,25 @@ SEED_DIR = 'seeds'
 
 #: ``dL*`` for a target acceptance: ``2 erfcinv(A*)``.
 target_spacing = length_for_acceptance
+
+LADDER_MODES = ('geometric', 'trailblaze', 'file')
+
+#: Keyword arguments of :class:`OpenMMRungSampler` and :class:`Trailblazer` that a
+#: caller may pass together as one ``trailblaze_kwargs`` dict.
+SAMPLER_KEYS = ('equil_ps', 'first_equil_ps', 'sample_ps', 'sample_interval_ps', 'max_sample_ps',
+                'neff_min', 'collision_rate_per_ps', 'pressure_bar')
+WALK_KEYS = ('target_acc', 'min_acc', 'max_acc', 'shrink', 'max_retries', 'max_rungs', 'max_dT',
+             'min_dT', 'force')
+
+
+def split_kwargs(kwargs: Optional[Dict[str, object]]) -> Tuple[Dict[str, object], Dict[str, object]]:
+    """Split one ``trailblaze_kwargs`` dict into sampler and walk keyword arguments."""
+    kwargs = dict(kwargs or {})
+    unknown = sorted(set(kwargs) - set(SAMPLER_KEYS) - set(WALK_KEYS))
+    if unknown:
+        raise ValueError(f'unknown trailblaze settings {unknown}; known: {SAMPLER_KEYS + WALK_KEYS}')
+    return ({k: v for k, v in kwargs.items() if k in SAMPLER_KEYS},
+            {k: v for k, v in kwargs.items() if k in WALK_KEYS})
 
 
 def beta(T):
@@ -430,6 +450,11 @@ class Trailblazer:
             self.printf(f'trailblaze: {self.T_min:.2f} -> {self.T_max:.2f} K, target acceptance '
                         f'{self.target_acc:.2f} (dL* = {self.dL:.3f}), reject below {self.min_acc:.2f}')
             t = time.time()
+            prepare = getattr(self.sampler, 'prepare', None)
+            if callable(prepare):
+                initial_seed = prepare(self.T_min, initial_seed)
+                self.printf(f'trailblaze: equilibrated the starting configuration at {self.T_min:.2f} K '
+                            f'in {time.time() - t:.0f} s')
             H_prev, seed, meta = self.sampler(self.T_min, initial_seed)
             rung = self._make_rung(self.T_min, H_prev, meta, acc=None, acc_pred=None, dL=None,
                                    step_scale=1.0, rejects=0, wall=time.time() - t)
@@ -537,11 +562,19 @@ class OpenMMRungSampler:
     stationary part holds ``neff_min`` effective samples or ``max_sample_ps``
     is reached.  ``H = U + pV`` comes from ``reduced_potential`` on the sampler
     state the move just updated, so no extra energy evaluation is needed.
+
+    The first rung is different: its seed comes from the burn-in, which may
+    sit at another temperature entirely (the campaign equilibrates at one
+    temperature and starts the ladder at another), and the ~1 K steps the
+    walk takes later equilibrate in picoseconds while a 10 K jump does not.
+    :meth:`prepare` therefore runs ``first_equil_ps`` at ``T_min`` before the
+    walk samples rung 0; :class:`Trailblazer` calls it when present.
     """
 
     def __init__(self, system, dt_fs: float, pressure_bar: float = 1.0, collision_rate_per_ps: float = 1.0,
                  equil_ps: float = 20.0, sample_ps: float = 100.0, sample_interval_ps: float = 1.0,
-                 max_sample_ps: float = 400.0, neff_min: int = 50, context_cache=None):
+                 max_sample_ps: float = 400.0, neff_min: int = 50, first_equil_ps: float = 200.0,
+                 context_cache=None):
         import openmm.unit as unit
         from openmmtools import cache, mcmc
         from openmmtools.states import ThermodynamicState
@@ -553,6 +586,7 @@ class OpenMMRungSampler:
         self.equil_ps, self.sample_ps = float(equil_ps), float(sample_ps)
         self.sample_interval_ps, self.max_sample_ps = float(sample_interval_ps), float(max_sample_ps)
         self.neff_min = int(neff_min)
+        self.first_equil_ps = float(first_equil_ps)
 
         self._state = ThermodynamicState(system=system, temperature=300.0 * unit.kelvin,
                                          pressure=pressure_bar * unit.bar)
@@ -565,7 +599,10 @@ class OpenMMRungSampler:
         self._chunk = mcmc.LangevinDynamicsMove(timestep=dt, collision_rate=gamma,
                                                 n_steps=max(1, int(round(self.sample_interval_ps * 1000.0 / self.dt_fs))),
                                                 reassign_velocities=False)
-        for move in (self._equil, self._chunk):
+        self._first = mcmc.LangevinDynamicsMove(timestep=dt, collision_rate=gamma,
+                                                n_steps=max(1, int(round(self.first_equil_ps * 1000.0 / self.dt_fs))),
+                                                reassign_velocities=True)
+        for move in (self._equil, self._chunk, self._first):
             move._global_citation_silence = True   # noqa: SLF001 -- same silencing Randolph uses
         self._n_chunks = max(1, int(round(self.sample_ps / self.sample_interval_ps)))
         self._max_chunks = max(self._n_chunks, int(round(self.max_sample_ps / self.sample_interval_ps)))
@@ -574,7 +611,16 @@ class OpenMMRungSampler:
         return dict(kind='openmm', dt_fs=self.dt_fs, pressure_bar=self.pressure_bar,
                     collision_rate_per_ps=self.collision_rate_per_ps, equil_ps=self.equil_ps,
                     sample_ps=self.sample_ps, sample_interval_ps=self.sample_interval_ps,
-                    max_sample_ps=self.max_sample_ps, neff_min=self.neff_min)
+                    max_sample_ps=self.max_sample_ps, neff_min=self.neff_min,
+                    first_equil_ps=self.first_equil_ps)
+
+    def prepare(self, T: float, seed: Seed) -> Seed:
+        """Equilibrate the burn-in configuration at the first rung for ``first_equil_ps``."""
+        u = self._unit
+        self._state.temperature = float(T) * u.kelvin
+        ss = self.sampler_state(seed)
+        self._first.apply(self._state, ss, context_cache=self._cache)
+        return self.seed_from_sampler_state(ss)
 
     # -- conversions -------------------------------------------------------
 

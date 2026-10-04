@@ -59,6 +59,7 @@ chimpss-pca-equil        = "chimpss.cli.pca_equilibration:main"
 chimpss-convergence-bundle = "chimpss.cli.convergence_bundle:main"
 chimpss-convergence-panel  = "chimpss.cli.convergence_panel:main"
 chimpss-ladder-audit       = "chimpss.cli.ladder_audit:main"
+chimpss-trailblaze         = "chimpss.cli.trailblaze:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -161,6 +161,7 @@ def test_reference_reordering_is_a_noop_when_already_first():
     ('chimpss.cli.motifs', 'main'),
     ('chimpss.cli.run_stats', 'main'),
     ('chimpss.cli.ladder_audit', 'main'),
+    ('chimpss.cli.trailblaze', 'main'),
 ])
 def test_entry_points_are_importable_and_callable(module, attr):
     mod = pytest.importorskip(module)
@@ -186,6 +187,7 @@ def test_new_entry_points_are_declared_in_pyproject():
     assert 'chimpss.cli.motifs:main' in block
     assert 'chimpss.cli.run_stats:main' in block
     assert 'chimpss.cli.ladder_audit:main' in block
+    assert 'chimpss.cli.trailblaze:main' in block
 
 
 def test_motorrow_parser_help_is_wellformed(monkeypatch):
@@ -311,3 +313,79 @@ def test_ladder_audit_virtual_requires_respace():
     from chimpss.cli import ladder_audit
     with pytest.raises(SystemExit):
         ladder_audit.parse_args(['runs/x', '--virtual'])
+
+
+# ---------------------------------------------------------------------------
+# chimpss-fultonmarket --ladder and chimpss-trailblaze
+# ---------------------------------------------------------------------------
+
+def test_fultonmarket_ladder_defaults_to_geometric(monkeypatch):
+    from chimpss.cli import fultonmarket
+    monkeypatch.setattr('sys.argv', _FM_POSITIONAL)
+    args = fultonmarket.parse_args()
+    assert args.ladder == 'geometric' and args.temperatures_file is None
+    assert args.init_overlap_thresh is None and args.term_overlap_thresh is None
+    assert fultonmarket.trailblaze_settings(args) is None
+
+
+def test_fultonmarket_trailblaze_settings_are_plumbed(monkeypatch):
+    from chimpss.cli import fultonmarket
+    from chimpss.fultonmarket.trailblaze import split_kwargs
+    monkeypatch.setattr('sys.argv', _FM_POSITIONAL + [
+        '--ladder', 'trailblaze', '--target_acc', '0.45', '--min_acc', '0.33', '--tb_sample_ps', '50',
+        '--tb_first_equil_ps', '10', '--init_overlap_thresh', '0.2'])
+    args = fultonmarket.parse_args()
+    s = fultonmarket.trailblaze_settings(args)
+    assert s['target_acc'] == 0.45 and s['min_acc'] == 0.33 and s['sample_ps'] == 50.0
+    assert s['first_equil_ps'] == 10.0 and s['force'] is False
+    sampler_kwargs, walk_kwargs = split_kwargs(s)          # every key is one the library accepts
+    assert set(sampler_kwargs) | set(walk_kwargs) == set(s)
+    assert args.init_overlap_thresh == 0.2 and args.term_overlap_thresh is None
+
+
+def test_fultonmarket_temperatures_file_implies_file_ladder(monkeypatch):
+    from chimpss.cli import fultonmarket
+    monkeypatch.setattr('sys.argv', _FM_POSITIONAL + ['--temperatures_file', 'ladder.npy'])
+    args = fultonmarket.parse_args()
+    assert args.ladder == 'file' and args.temperatures_file == 'ladder.npy'
+    monkeypatch.setattr('sys.argv', _FM_POSITIONAL + ['--temperatures_file', 'ladder.npy', '--ladder', 'trailblaze'])
+    with pytest.raises(SystemExit) as exc:
+        fultonmarket.parse_args()
+    assert exc.value.code == 2
+
+
+def test_fultonmarket_passes_ladder_arguments_to_the_library(monkeypatch, tmp_path):
+    """The flags must reach FultonMarket.__init__ and run(), not just parse."""
+    import chimpss.fultonmarket as pkg
+    from chimpss.cli import fultonmarket
+    seen = {}
+
+    class FakeFM:
+        def __init__(self, **kw):
+            seen['init'] = kw
+
+        def run(self, **kw):
+            seen['run'] = kw
+
+    monkeypatch.setattr(pkg, 'FultonMarket', FakeFM)
+    monkeypatch.setattr('sys.argv', ['chimpss-fultonmarket', 'in.pdb', 'sys.xml', str(tmp_path / 'out'),
+                                     '--ladder', 'trailblaze', '--target_acc', '0.4', '--term_overlap_thresh', '0.25'])
+    fultonmarket.main()
+    assert seen['init']['ladder'] == 'trailblaze' and seen['init']['temperatures_file'] is None
+    assert seen['init']['trailblaze_kwargs']['target_acc'] == 0.4
+    assert seen['run']['init_overlap_thresh'] is None and seen['run']['term_overlap_thresh'] == 0.25
+
+
+def test_trailblaze_cli_walk_and_from_run_parse():
+    from chimpss.cli import trailblaze
+    args = trailblaze.parse_args(['walk', 'in.pdb', 'sys.xml', 'out/', '--input_state', 's.xml',
+                                  '--T_min', '310', '--T_max', '367', '--timestep', '3.5'])
+    assert args.mode == 'walk' and args.timestep == 3.5 and args.target_acc == 0.4
+    s = trailblaze.walk_settings(args)
+    from chimpss.fultonmarket.trailblaze import split_kwargs
+    split_kwargs(s)
+    with pytest.raises(SystemExit):
+        trailblaze.parse_args(['walk', 'in.pdb', 'sys.xml', 'out/'])     # --input_state is required
+    args = trailblaze.parse_args(['from-run', 'runs/x', '--out', 'ladders/x', '--blocks', '120:161'])
+    assert args.mode == 'from-run' and args.out == 'ladders/x' and args.blocks == ['120:161']
+    assert args.skip == 1 and not args.no_virtual

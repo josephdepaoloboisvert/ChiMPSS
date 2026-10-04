@@ -48,6 +48,20 @@ class FultonMarket():
         Maximum temperature in Kelvin. Default 367.447.
     n_replicates : int
         Number of replicas across the temperature ladder. Default 12.
+        Ignored when the ladder is trailblazed or read from a file.
+    ladder : str
+        How the block-0 ladder is chosen. ``'geometric'`` (default) is the
+        historical ``geometric_distribution(T_min, T_max, n_replicates)``;
+        ``'trailblaze'`` walks the ladder at the start of ``run()`` so every
+        neighbour pair sits at the same thermodynamic length
+        (:mod:`chimpss.fultonmarket.trailblaze`), caching the result under
+        ``<output_dir>/trailblaze/``; ``'file'`` reads ``temperatures_file``.
+        On resume the ladder saved with the last block always wins.
+    temperatures_file : str, optional
+        A ``.npy`` or text ladder; implies ``ladder='file'``.
+    trailblaze_kwargs : dict, optional
+        Settings for the walk and its sampler; see
+        ``trailblaze.SAMPLER_KEYS`` and ``trailblaze.WALK_KEYS``.
     """
 
     def __init__(self,
@@ -59,12 +73,39 @@ class FultonMarket():
                  T_max: float = 367.447,
                  n_replicates: int = 12,
                  protein_name: str = None,
-                 ligand_name: str = None):
+                 ligand_name: str = None,
+                 ladder: str = 'geometric',
+                 temperatures_file: str = None,
+                 trailblaze_kwargs: dict = None):
 
         printf('Welcome to FultonMarket.')
 
-        self.temperatures = [temp * unit.kelvin for temp in geometric_distribution(T_min, T_max, n_replicates)]
-        self.n_replicates = n_replicates
+        from chimpss.fultonmarket.trailblaze import LADDER_MODES, load_ladder_file, split_kwargs
+
+        if temperatures_file is not None:
+            ladder = 'file'
+        if ladder not in LADDER_MODES:
+            raise ValueError(f'unknown ladder mode {ladder!r}; choose from {LADDER_MODES}')
+        self.ladder_mode = ladder
+        self.ladder_meta = {}
+        self.T_min, self.T_max = float(T_min), float(T_max)
+        self.trailblaze_kwargs = dict(trailblaze_kwargs or {})
+        split_kwargs(self.trailblaze_kwargs)          # fail on unknown keys before any work
+
+        if ladder == 'file':
+            temps = load_ladder_file(temperatures_file)
+            if n_replicates != len(temps):
+                printf(f'NOTE: n_replicates={n_replicates} ignored; {temperatures_file} holds {len(temps)} rungs')
+            if abs(temps[0] - self.T_min) > 1e-6 or abs(temps[-1] - self.T_max) > 1e-6:
+                printf(f'NOTE: T_min/T_max ({T_min}/{T_max}) ignored; {temperatures_file} spans '
+                       f'{temps[0]:.2f}-{temps[-1]:.2f} K')
+            self.temperatures = [float(t) * unit.kelvin for t in temps]
+            self.n_replicates = len(temps)
+            self.ladder_meta = {'ladder': 'file', 'source': temperatures_file}
+        else:
+            # For 'trailblaze' this is a placeholder until run() knows output_dir.
+            self.temperatures = [temp * unit.kelvin for temp in geometric_distribution(T_min, T_max, n_replicates)]
+            self.n_replicates = n_replicates
         self.sele_str = sele_str
         self.protein_name = validate_name(protein_name) if protein_name else None
         self.ligand_name = validate_name(ligand_name) if ligand_name else None
@@ -124,8 +165,8 @@ class FultonMarket():
             sim_length: int = 25,
             total_sim_time: int = None,
             minimum_fraction: float = 0.25,
-            init_overlap_thresh: float = 0.5,
-            term_overlap_thresh: float = 0.35,
+            init_overlap_thresh: float = None,
+            term_overlap_thresh: float = None,
             output_dir: str = os.path.join(os.getcwd(), 'FultonMarket_output/'),
             n_resample: int = 1000,
             max_equil_fraction: float = 0.75,
@@ -159,12 +200,14 @@ class FultonMarket():
         total_sim_time : int, optional
             Total aggregate simulation time across all replicates, in
             nanoseconds. Used as a terminal stopping criterion if reached.
-        init_overlap_thresh : float
+        init_overlap_thresh : float, optional
             Minimum acceptance rate during the first sub-simulation before
-            triggering a restart. Default 0.5.
-        term_overlap_thresh : float
+            triggering a restart. None (default) resolves to 0.5, or to the
+            walk's ``min_acc`` when the ladder was trailblazed.
+        term_overlap_thresh : float, optional
             Minimum acceptance rate at any point after the first sub-simulation
-            before triggering a restart. Default 0.35.
+            before triggering a restart. None (default) resolves to 0.35, or to
+            the walk's ``min_acc`` when the ladder was trailblazed.
         output_dir : str
             Path to output directory. Default: 'FultonMarket_output/' in cwd.
         n_resample : int
@@ -275,6 +318,11 @@ class FultonMarket():
         printf(f'panel               : {self.panel_kwargs or None}')
 
         self._configure_experiment_parameters()
+        self._resolve_ladder()
+        self._resolve_overlap_thresholds()
+        printf(f'ladder              : {self.ladder_mode}, {self.n_replicates} rungs '
+               f'{self.temperatures[0]._value:.2f}-{self.temperatures[-1]._value:.2f} K; '
+               f'insertion thresholds {self.init_overlap_thresh}/{self.term_overlap_thresh}')
         self._setup_panel()
 
         while not self.finished:
@@ -285,8 +333,8 @@ class FultonMarket():
             self._set_parameters()
 
             self.simulation = Randolph(**self.params)
-            self.simulation.main(init_overlap_thresh=init_overlap_thresh,
-                                 term_overlap_thresh=term_overlap_thresh)
+            self.simulation.main(init_overlap_thresh=self.init_overlap_thresh,
+                                 term_overlap_thresh=self.term_overlap_thresh)
 
             self._save_sub_simulation()
             self._audit_ladder()
@@ -314,6 +362,99 @@ class FultonMarket():
                        f"max_time={at_max_time} -> {'STOP' if self.finished else 'continue'}")
             self.sim_no += 1
 
+
+    # ------------------------------------------------------------------
+    # Ladder resolution
+    # ------------------------------------------------------------------
+    @property
+    def trailblaze_dir(self):
+        return os.path.join(self.output_dir, 'trailblaze')
+
+    def _resolve_ladder(self):
+        """Settle the block-0 ladder once ``output_dir`` and ``sim_no`` are known.
+
+        ``'trailblaze'`` walks the ladder on rank 0 (or reuses a complete cache
+        under ``trailblaze/``) when no block has been saved yet; on resume it
+        only reads the walk's metadata, because ``_load_initial_args`` takes
+        the ladder from the last saved block.  The other modes need nothing.
+        """
+        if self.ladder_mode != 'trailblaze':
+            return
+        if self.sim_no == 0:
+            temps, meta = self._trailblaze_rank0()
+            self.temperatures = [float(t) * unit.kelvin for t in temps]
+            self.n_replicates = len(temps)
+            self._set_init_positions()
+            self._set_init_box_vectors()
+            self.ladder_meta = dict(meta)
+        else:
+            self.ladder_meta = self._read_trailblaze_meta()
+
+    def _read_trailblaze_meta(self):
+        from chimpss.fultonmarket.trailblaze import RECORD_NAME, TrailblazeRecord
+        path = os.path.join(self.trailblaze_dir, RECORD_NAME)
+        rec = TrailblazeRecord.load_if_complete(path) if os.path.exists(path) else None
+        if rec is None:
+            printf(f'WARNING: ladder=trailblaze but no complete {path}; insertion thresholds fall back '
+                   f'to the geometric defaults')
+            return {}
+        return dict(rec.meta)
+
+    @mpiplus.on_single_node(rank=0, broadcast_result=True, sync_nodes=True)
+    def _trailblaze_rank0(self):
+        """The walked ladder as plain floats plus its metadata; cached across launches."""
+        from chimpss.fultonmarket.trailblaze import (
+            RECORD_NAME,
+            OpenMMRungSampler,
+            Trailblazer,
+            TrailblazeRecord,
+            split_kwargs,
+        )
+        os.makedirs(self.trailblaze_dir, exist_ok=True)
+        cached = TrailblazeRecord.load_if_complete(os.path.join(self.trailblaze_dir, RECORD_NAME))
+        if cached is not None:
+            printf(f'trailblaze: using the cached ladder of {len(cached.rungs)} rungs in {self.trailblaze_dir}')
+            return cached.temperatures.tolist(), cached.meta
+        if not hasattr(self, 'context'):
+            raise RuntimeError('ladder=trailblaze needs input_state: the walk starts from its configuration')
+        sampler_kwargs, walk_kwargs = split_kwargs(self.trailblaze_kwargs)
+        sampler = OpenMMRungSampler(self.system, dt_fs=self.dt, **sampler_kwargs)
+        seed = sampler.seed_from_sampler_state(SamplerState.from_context(self.context))
+        walker = Trailblazer(sampler, self.T_min, self.T_max, out_dir=self.trailblaze_dir, printf=printf,
+                             **walk_kwargs)
+        rec = walker.run(seed)
+        return rec.temperatures.tolist(), rec.meta
+
+    def trailblaze(self, output_dir: str, dt: float = 2.0):
+        """Run (or reuse) the walk alone and return ``(temperatures, meta)``.
+
+        What ``run()`` does before block 0 with ``ladder='trailblaze'``, as a
+        separate step so a batch job can pay for the walk on one GPU and the
+        production job then finds the cache.
+        """
+        if self.ladder_mode != 'trailblaze':
+            raise ValueError("trailblaze() needs ladder='trailblaze'")
+        self.output_dir = output_dir
+        self.dt = dt
+        os.makedirs(output_dir, exist_ok=True)
+        temps, meta = self._trailblaze_rank0()
+        self.temperatures = [float(t) * unit.kelvin for t in temps]
+        self.n_replicates = len(temps)
+        self._set_init_positions()
+        self._set_init_box_vectors()
+        self.ladder_meta = dict(meta)
+        return temps, meta
+
+    def _resolve_overlap_thresholds(self):
+        """None means: the geometric defaults, or the walk's floor for a trailblazed ladder."""
+        floor = self.ladder_meta.get('min_acc')
+        if self.init_overlap_thresh is None:
+            self.init_overlap_thresh = float(floor) if floor is not None else 0.5
+        if self.term_overlap_thresh is None:
+            self.term_overlap_thresh = float(floor) if floor is not None else 0.35
+        if self.ladder_mode == 'file' and floor is None:
+            printf('NOTE: a file ladder carries no acceptance target; pass init/term_overlap_thresh '
+                   'if the geometric defaults (0.5/0.35) would insert rungs it does not need')
 
     def _set_parameters(self):
         """

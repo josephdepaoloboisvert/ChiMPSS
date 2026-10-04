@@ -29,6 +29,23 @@ made unreproducible a production run.
 
 ### Added
 
+- **Thermodynamic trailblazing** (`chimpss.fultonmarket.trailblaze`,
+  `chimpss-fultonmarket --ladder trailblaze`, `chimpss-trailblaze`). The
+  temperature ladder is walked instead of guessed: sample the enthalpy at the
+  current rung, step to the temperature a fixed thermodynamic length
+  `dL* = 2 erfcinv(A*)` away (Shenfeld et al. 2009; the sequential procedure
+  of Minh's AlGDock), seed the new rung from the previous one, measure the
+  exchange acceptance between the two sample sets, reject-and-shrink below
+  `--min_acc`. The rung count is an output; every neighbour pair sits at the
+  same thermodynamic length. Resumable, cached under
+  `<output_dir>/trailblaze/`, usable as a separate job (`chimpss-trailblaze
+  walk`) or from a finished run without simulation (`chimpss-trailblaze
+  from-run`). `--temperatures_file` loads any ladder; `--init_overlap_thresh`
+  / `--term_overlap_thresh` are now reachable from the CLI and default to the
+  walk's floor for a trailblazed ladder, so the insertion rule stays a safety
+  net rather than firing on every pair below the old 0.5. Default target
+  acceptance 0.40; expected ~62-67 rungs on the campaign systems against
+  110-132 today. Plan: `docs/thermodynamic_trailblazing_plan.md`.
 - **`chimpss.analysis.ladder` and `chimpss-ladder-audit`** — the temperature
   ladder, audited from the three small arrays every block already saves.
   Recovers the per-rung enthalpy fluctuation (the thermodynamic-length metric,

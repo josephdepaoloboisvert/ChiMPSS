@@ -28,7 +28,49 @@ def parse_args():
     p.add_argument('--T_max',        default=367,  type=float,
                    help='Highest temperature on the ladder (K). Default 367.')
     p.add_argument('--n_replicates', default=68,   type=int,
-                   help='Number of replica exchange states. Default 68.')
+                   help='Number of replica exchange states. Default 68. Ignored when the '
+                        'ladder is trailblazed or read from a file.')
+    p.add_argument('--ladder', default='geometric', choices=['geometric', 'trailblaze', 'file'],
+                   help="How the block-0 ladder is chosen. 'geometric' (default) is the "
+                        "historical spacing. 'trailblaze' walks the ladder before block 0 so "
+                        "every neighbour pair sits at the same thermodynamic length, caching it "
+                        "under <output_dir>/trailblaze/ (chimpss-trailblaze can do this as a "
+                        "separate job). 'file' reads --temperatures_file. On resume the saved "
+                        "ladder always wins.")
+    p.add_argument('--temperatures_file', default=None, type=str,
+                   help='Ladder as .npy or one temperature per line; implies --ladder file.')
+    p.add_argument('--init_overlap_thresh', default=None, type=float,
+                   help='Neighbour acceptance below which block 0 inserts a rung and restarts. '
+                        'Default: 0.5, or the walk\'s --min_acc for a trailblazed ladder.')
+    p.add_argument('--term_overlap_thresh', default=None, type=float,
+                   help='Same for later blocks. Default: 0.35, or --min_acc for a trailblazed ladder.')
+
+    # Trailblazing
+    t = p.add_argument_group('trailblazing (--ladder trailblaze)')
+    t.add_argument('--target_acc', default=0.40, type=float,
+                   help='Neighbour acceptance the walk aims for; sets the spacing '
+                        'dL* = 2 erfcinv(A). Default 0.40 (dL* 1.19).')
+    t.add_argument('--min_acc', default=0.30, type=float,
+                   help='Measured acceptance below which a proposed rung is rejected and the '
+                        'step shrunk. Default 0.30.')
+    t.add_argument('--max_acc', default=0.75, type=float,
+                   help='Acceptance above which a proposed rung is rejected and the step '
+                        'stretched. Default 0.75.')
+    t.add_argument('--tb_first_equil_ps', default=200.0, type=float,
+                   help='Equilibration of the starting configuration at T_min. Default 200.')
+    t.add_argument('--tb_equil_ps', default=20.0, type=float,
+                   help='Equilibration at each new rung. Default 20.')
+    t.add_argument('--tb_sample_ps', default=100.0, type=float,
+                   help='Enthalpy sampling per rung, extended until --tb_neff_min effective '
+                        'samples or --tb_max_sample_ps. Default 100.')
+    t.add_argument('--tb_sample_interval_ps', default=1.0, type=float,
+                   help='Spacing of enthalpy samples. Default 1.')
+    t.add_argument('--tb_max_sample_ps', default=400.0, type=float, help='Default 400.')
+    t.add_argument('--tb_neff_min', default=50, type=int, help='Default 50.')
+    t.add_argument('--tb_max_rungs', default=400, type=int,
+                   help='Abort if the walk has not reached T_max after this many rungs. Default 400.')
+    t.add_argument('--tb_force', action='store_true',
+                   help='Resume a trailblaze record written with different settings.')
 
     # Simulation timing
     p.add_argument('--iter_length', default=0.001, type=float,
@@ -164,7 +206,22 @@ def parse_args():
     args = p.parse_args()
     if args.convergence != 'jsd' and not args.panel_pangpcr_prefix:
         p.error(f'--convergence {args.convergence} requires --panel_pangpcr_prefix')
+    if args.temperatures_file and args.ladder == 'trailblaze':
+        p.error('--temperatures_file cannot be combined with --ladder trailblaze')
+    if args.temperatures_file:
+        args.ladder = 'file'
     return args
+
+
+def trailblaze_settings(args):
+    """The trailblaze_kwargs dict implied by the parsed flags, or None unless --ladder trailblaze."""
+    if args.ladder != 'trailblaze':
+        return None
+    return dict(target_acc=args.target_acc, min_acc=args.min_acc, max_acc=args.max_acc,
+                first_equil_ps=args.tb_first_equil_ps, equil_ps=args.tb_equil_ps,
+                sample_ps=args.tb_sample_ps, sample_interval_ps=args.tb_sample_interval_ps,
+                max_sample_ps=args.tb_max_sample_ps, neff_min=args.tb_neff_min,
+                max_rungs=args.tb_max_rungs, force=args.tb_force)
 
 
 def panel_settings(args):
@@ -194,7 +251,10 @@ def main():
                 T_max=args.T_max,
                 n_replicates=args.n_replicates,
                 protein_name=args.protein_name,
-                ligand_name=args.ligand_name)
+                ligand_name=args.ligand_name,
+                ladder=args.ladder,
+                temperatures_file=args.temperatures_file,
+                trailblaze_kwargs=trailblaze_settings(args))
 
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -213,6 +273,8 @@ def main():
                total_sim_time=args.total_sim_time,
                output_dir=args.output_dir,
                minimum_fraction=args.minimum_sim_fraction,
+               init_overlap_thresh=args.init_overlap_thresh,
+               term_overlap_thresh=args.term_overlap_thresh,
                n_resample=args.n_resample,
                max_equil_fraction=args.max_equil_fraction,
                min_ess=args.min_ess,
