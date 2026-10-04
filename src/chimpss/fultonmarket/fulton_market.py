@@ -289,6 +289,7 @@ class FultonMarket():
                                  term_overlap_thresh=term_overlap_thresh)
 
             self._save_sub_simulation()
+            self._audit_ladder()
             at_max_time = (self.total_sim_time is not None
                            and self.sim_no >= self.total_n_sims)
             # The published criterion runs in every mode: it writes the
@@ -680,6 +681,41 @@ class FultonMarket():
         if new:
             printf(f"convergence panel: ingested {len(new)} existing block(s)")
         return cfg
+
+    @mpiplus.on_single_node(rank=0, sync_nodes=True)
+    def _audit_ladder(self):
+        """Record the block's per-pair exchange acceptance and thermodynamic length.
+
+        Randolph prints the per-pair acceptance it reads from the reporter and
+        then the NetCDF is truncated, so nothing on disk said how well the
+        ladder mixed.  This reads the block just saved and writes
+        ``analysis/ladder/<block>.json`` (chimpss.analysis.ladder.block_audit):
+        the exact Metropolis acceptance of the configurations that sat at each
+        neighbour pair, the pair's thermodynamic length from the enthalpy
+        fluctuation, and a trailing pooled acceptance with less noise than one
+        block.  A diagnostic, never a reason to lose the sampling.
+        """
+        try:
+            import json
+
+            from chimpss.analysis.ladder import block_audit
+
+            out_dir = os.path.join(self.output_dir, 'analysis', 'ladder')
+            os.makedirs(out_dir, exist_ok=True)
+            record = block_audit(self.output_dir, self.sim_no, threshold=self.term_overlap_thresh)
+            path = os.path.join(out_dir, f'{self.sim_no:04d}.json')
+            tmp = f'{path}.tmp.{os.getpid()}'
+            with open(tmp, 'w') as fh:
+                json.dump(record, fh)
+            os.replace(tmp, path)
+            low = record.get('pairs_below_threshold', [])
+            printf(f"ladder block {self.sim_no}: neighbour acceptance min/mean/max "
+                   f"{record['A_min']:.3f}/{record['A_mean']:.3f}/{record['A_max']:.3f} "
+                   f"over {record['n_iterations_used']} iterations; trailing "
+                   f"{len(record['trailing_blocks'])} block(s): {len(low)} pair(s) below "
+                   f"{self.term_overlap_thresh}")
+        except Exception as exc:
+            printf(f'WARNING: ladder audit failed for block {self.sim_no}: {exc}')
 
     @mpiplus.on_single_node(rank=0, broadcast_result=True, sync_nodes=True)
     def _evaluate_panel(self):

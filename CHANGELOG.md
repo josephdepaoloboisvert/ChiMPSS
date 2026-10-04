@@ -29,6 +29,21 @@ made unreproducible a production run.
 
 ### Added
 
+- **`chimpss.analysis.ladder` and `chimpss-ladder-audit`** — the temperature
+  ladder, audited from the three small arrays every block already saves.
+  Recovers the per-rung enthalpy fluctuation (the thermodynamic-length metric,
+  Shenfeld et al. 2009), the thermodynamic length of every neighbour pair, and
+  the *exact* nearest-neighbour exchange acceptance of the configurations that
+  sat at the two rungs, which Randolph printed to stdout and then lost.
+  `--respace` writes a ladder equidistant in thermodynamic length for a target
+  acceptance and `--virtual` checks it by reweighting the saved samples.
+  Measured on all seven local runs: the campaign ladders (110–132 rungs,
+  acceptance 0.45–0.84 along the ladder) carry twice the rungs an equidistant
+  ladder needs at 40 % acceptance (62–67), because `geometric_distribution` is
+  exponential-in-index rather than constant-ratio and midpoint insertion
+  overshoots. `FultonMarket.run` now writes `analysis/ladder/<block>.json`
+  after every block with the same numbers. Groundwork for thermodynamic
+  trailblazing (`docs/thermodynamic_trailblazing_plan.md`).
 - **`chimpss-motorrow --dt`** (plus `--step_5_nsteps`, `--restrain_step_5`).
   `MotorRow.main()` has always accepted a timestep, but no console-script flag
   exposed it, so the hydrogen-mass-repartitioned system XML that Bridgeport

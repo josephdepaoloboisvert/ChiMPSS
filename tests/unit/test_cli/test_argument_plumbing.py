@@ -160,6 +160,7 @@ def test_reference_reordering_is_a_noop_when_already_first():
     ('chimpss.cli.recovery', 'main'),
     ('chimpss.cli.motifs', 'main'),
     ('chimpss.cli.run_stats', 'main'),
+    ('chimpss.cli.ladder_audit', 'main'),
 ])
 def test_entry_points_are_importable_and_callable(module, attr):
     mod = pytest.importorskip(module)
@@ -184,6 +185,7 @@ def test_new_entry_points_are_declared_in_pyproject():
 
     assert 'chimpss.cli.motifs:main' in block
     assert 'chimpss.cli.run_stats:main' in block
+    assert 'chimpss.cli.ladder_audit:main' in block
 
 
 def test_motorrow_parser_help_is_wellformed(monkeypatch):
@@ -280,3 +282,32 @@ def test_fultonmarket_rejects_an_unknown_convergence_mode(monkeypatch):
     monkeypatch.setattr('sys.argv', _FM_POSITIONAL + ['--convergence', 'vibes'])
     with pytest.raises(SystemExit):
         fultonmarket.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# chimpss-ladder-audit
+# ---------------------------------------------------------------------------
+
+def test_ladder_audit_defaults():
+    from chimpss.cli import ladder_audit
+    args = ladder_audit.parse_args(['runs/x'])
+    assert args.skip == 1 and args.smooth == 'cv_linear' and args.targets == [0.35, 0.40, 0.50]
+    assert args.blocks is None and args.out is None and not args.respace and not args.tsv
+
+
+def test_ladder_audit_respace_needs_exactly_one_target():
+    from chimpss.cli import ladder_audit
+    with pytest.raises(SystemExit) as exc:
+        ladder_audit.parse_args(['runs/x', '--respace'])
+    assert exc.value.code == 2
+    with pytest.raises(SystemExit):
+        ladder_audit.parse_args(['runs/x', '--respace', '--target_acceptance', '0.4', '--n_rungs', '60'])
+    args = ladder_audit.parse_args(['runs/x', '--respace', '--target_acceptance', '0.4', '--virtual',
+                                    '--blocks', '120:161', '7'])
+    assert args.target_acceptance == 0.4 and args.virtual and args.blocks == ['120:161', '7']
+
+
+def test_ladder_audit_virtual_requires_respace():
+    from chimpss.cli import ladder_audit
+    with pytest.raises(SystemExit):
+        ladder_audit.parse_args(['runs/x', '--virtual'])
