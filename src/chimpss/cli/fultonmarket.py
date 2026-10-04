@@ -71,6 +71,11 @@ def parse_args():
                    help='Abort if the walk has not reached T_max after this many rungs. Default 400.')
     t.add_argument('--tb_sigma_window', default=5, type=int,
                    help='Rungs over which sigma_H is pooled for the step (1 = each rung alone). Default 5.')
+    t.add_argument('--tb_sigma_source', default='pooled', choices=['pooled', 'slope'],
+                   help="What the step uses: 'pooled' (default) the pooled enthalpy fluctuation; "
+                        "'slope' the fluctuation-dissipation value from the enthalpy slope d<H>/dT "
+                        "over the trailing rungs, which tracks the production metric more closely "
+                        "when single-trajectory windows miss slow fluctuations.")
     t.add_argument('--tb_force', action='store_true',
                    help='Resume a trailblaze record written with different settings.')
 
@@ -223,7 +228,8 @@ def trailblaze_settings(args):
                 first_equil_ps=args.tb_first_equil_ps, equil_ps=args.tb_equil_ps,
                 sample_ps=args.tb_sample_ps, sample_interval_ps=args.tb_sample_interval_ps,
                 max_sample_ps=args.tb_max_sample_ps, neff_min=args.tb_neff_min,
-                max_rungs=args.tb_max_rungs, sigma_window=args.tb_sigma_window, force=args.tb_force)
+                max_rungs=args.tb_max_rungs, sigma_window=args.tb_sigma_window, sigma_source=args.tb_sigma_source,
+                force=args.tb_force)
 
 
 def panel_settings(args):

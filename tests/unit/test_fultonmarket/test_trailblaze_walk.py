@@ -216,3 +216,41 @@ def test_pooled_sigma_tames_noisy_rung_estimates(tmp_path):
     w = rec.rungs[3:8]
     expect = np.sqrt(sum(x.neff * x.sigma ** 2 for x in w) / sum(x.neff for x in w))
     assert r.sigma_step == pytest.approx(expect)
+
+
+class WindowLimitedSampler(FakeSampler):
+    """Means follow the true heat capacity but the sampled fluctuation is 10 % too small,
+    the signature of a short single-trajectory window that misses slow modes."""
+
+    def __call__(self, T, seed):
+        self.calls.append(T)
+        H = self.rng.normal(-1.0e6 + CV * tb.KB * T, 0.9 * tb.KB * T * np.sqrt(CV), size=self.n)
+        return H, make_seed(tag=T), {'g': 1.0, 'neff': float(self.n)}
+
+
+def test_slope_sigma_source_recovers_the_true_metric():
+    dL = tb.target_spacing(0.4)
+    eps_true = dL * tb.KB * 310.0 / tb.sigma_from_cv(310.0, CV)
+    ratio_true = 1.0 / (1.0 - eps_true)
+    walks = {}
+    for source in ('pooled', 'slope'):
+        sampler = WindowLimitedSampler(seed=11, n=400)
+        rec = tb.Trailblazer(sampler, 310.0, 340.0, target_acc=0.4, min_acc=0.05, max_acc=0.95,
+                             sigma_source=source, printf=lambda *_: None).run(make_seed())
+        T = rec.temperatures
+        walks[source] = np.median(T[11:-2] / T[10:-3])      # once the slope window is full
+        assert rec.inputs['sigma_source'] == source
+    # stepping on the under-estimated variance spaces the rungs ~10 % too far apart;
+    # the slope route lands on the true ratio
+    assert walks['pooled'] - 1.0 == pytest.approx(1.1 * (ratio_true - 1.0), rel=0.05)
+    assert walks['slope'] - 1.0 == pytest.approx(ratio_true - 1.0, rel=0.03)
+
+
+def test_slope_source_falls_back_until_the_window_exists():
+    sampler = FakeSampler(seed=12, n=400)
+    rec = tb.Trailblazer(sampler, 310.0, 314.0, target_acc=0.4, min_acc=0.05, max_acc=0.95,
+                         sigma_source='slope', printf=lambda *_: None).run(make_seed())
+    assert rec.rungs[0].cv_slope is None and rec.rungs[2].cv_slope is None
+    assert rec.rungs[3].cv_slope is not None and rec.rungs[3].cv_slope == pytest.approx(CV * tb.KB, rel=0.1)
+    with pytest.raises(ValueError):
+        tb.Trailblazer(sampler, 310.0, 314.0, sigma_source='variance')

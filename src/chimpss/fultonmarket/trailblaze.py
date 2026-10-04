@@ -78,7 +78,7 @@ LADDER_MODES = ('geometric', 'trailblaze', 'file')
 SAMPLER_KEYS = ('equil_ps', 'first_equil_ps', 'sample_ps', 'sample_interval_ps', 'max_sample_ps',
                 'neff_min', 'collision_rate_per_ps', 'pressure_bar')
 WALK_KEYS = ('target_acc', 'min_acc', 'max_acc', 'shrink', 'max_retries', 'max_rungs', 'max_dT',
-             'min_dT', 'sigma_window', 'force')
+             'min_dT', 'sigma_window', 'sigma_source', 'force')
 
 
 def split_kwargs(kwargs: Optional[Dict[str, object]]) -> Tuple[Dict[str, object], Dict[str, object]]:
@@ -258,7 +258,8 @@ class Rung:
     rejects: int
     seed_path: Optional[str]
     wall_s: float
-    sigma_step: Optional[float] = None   #: pooled over the window; what the step from here used
+    sigma_step: Optional[float] = None   #: what the step from here used (pooled or slope-based)
+    cv_slope: Optional[float] = None     #: d<H>/dT over the trailing rungs, kJ/mol/K, when available
 
 
 @dataclass
@@ -384,6 +385,17 @@ class Trailblazer:
         noise on its sigma and hence on the step; the metric changes by well
         under 1 % per kelvin, so five neighbouring rungs are a better
         estimate of it than one.  1 disables pooling.
+    sigma_source
+        ``'pooled'`` (default) steps on the pooled enthalpy fluctuation.
+        ``'slope'`` steps on the fluctuation-dissipation estimate instead:
+        ``C_V = d<H>/dT`` from a straight-line fit of the rung means over the
+        last ``2 * sigma_window`` rungs, ``sigma = sqrt(k_B T^2 C_V)``.  A
+        single trajectory sampled for 100-300 ps sees the fast fluctuations
+        but not the slower configurational variance that a production block
+        samples across many exchanging walkers, so the variance route ran
+        5-10 % below the production metric on NTSR1 while the slope route
+        tracked it within 1-4 %.  Falls back to the pooled value until four
+        rungs exist or when the fit is implausible.
     out_dir
         Where ``trailblaze.json``, ``temperatures.npy`` and ``seeds/`` go.
         Required for resume; None keeps everything in memory.
@@ -392,8 +404,8 @@ class Trailblazer:
     def __init__(self, sampler: RungSampler, T_min: float, T_max: float, target_acc: float = 0.40,
                  min_acc: float = 0.30, max_acc: float = 0.75, shrink: float = 1.25,
                  max_retries: int = 6, max_rungs: int = 400, max_dT: float = 10.0,
-                 min_dT: float = 0.1, sigma_window: int = 5, out_dir: Optional[str] = None,
-                 printf: Callable = print, force: bool = False):
+                 min_dT: float = 0.1, sigma_window: int = 5, sigma_source: str = 'pooled',
+                 out_dir: Optional[str] = None, printf: Callable = print, force: bool = False):
         if not T_max > T_min > 0:
             raise ValueError('need 0 < T_min < T_max')
         if not 0 < min_acc <= target_acc <= max_acc < 1:
@@ -404,6 +416,9 @@ class Trailblazer:
         self.shrink, self.max_retries = float(shrink), int(max_retries)
         self.max_rungs, self.max_dT, self.min_dT = int(max_rungs), float(max_dT), float(min_dT)
         self.sigma_window = max(1, int(sigma_window))
+        if sigma_source not in ('pooled', 'slope'):
+            raise ValueError("sigma_source must be 'pooled' or 'slope'")
+        self.sigma_source = sigma_source
         self.out_dir = out_dir
         self.printf = printf
         self.force = force
@@ -416,7 +431,7 @@ class Trailblazer:
         d = dict(T_min=self.T_min, T_max=self.T_max, target_acc=self.target_acc, min_acc=self.min_acc,
                  max_acc=self.max_acc, shrink=self.shrink, max_retries=self.max_retries,
                  max_rungs=self.max_rungs, max_dT=self.max_dT, min_dT=self.min_dT, dL=self.dL,
-                 sigma_window=self.sigma_window)
+                 sigma_window=self.sigma_window, sigma_source=self.sigma_source)
         describe = getattr(self.sampler, 'describe', None)
         if callable(describe):
             d['sampler'] = describe()
@@ -452,6 +467,27 @@ class Trailblazer:
         var = np.array([r.sigma ** 2 for r in window])
         return float(np.sqrt((w * var).sum() / w.sum()))
 
+    def slope_cv(self, rungs: List[Rung]) -> Optional[float]:
+        """``d<H>/dT`` in kJ/mol/K from the last ``2 * sigma_window`` rung means, or None."""
+        window = rungs[-2 * self.sigma_window:]
+        if len(window) < 4:
+            return None
+        T = np.array([r.T for r in window])
+        H = np.array([r.mean_H for r in window])
+        cv = float(np.polyfit(T, H, 1)[0])
+        return cv if cv > 0 else None
+
+    def step_sigma(self, rungs: List[Rung]) -> Tuple[float, Optional[float]]:
+        """``(sigma for the next step, C_V slope used or None)`` per ``sigma_source``."""
+        pooled = self.pooled_sigma(rungs)
+        cv = self.slope_cv(rungs)
+        if self.sigma_source != 'slope' or cv is None:
+            return pooled, cv
+        sigma = float(np.sqrt(KB * rungs[-1].T ** 2 * cv))
+        if not 0.5 < sigma / pooled < 2.0:        # implausible fit: lagging means or a transient
+            return pooled, cv
+        return sigma, cv
+
     def run(self, initial_seed: Seed) -> TrailblazeRecord:
         rec, resumed = self._open_record()
         if rec.complete:
@@ -477,7 +513,7 @@ class Trailblazer:
                                    step_scale=1.0, rejects=0, wall=time.time() - t)
             rung.seed_path = self._save_seed(0, seed, H_prev)
             rec.rungs.append(rung)
-            rung.sigma_step = self.pooled_sigma(rec.rungs)
+            rung.sigma_step, rung.cv_slope = self.step_sigma(rec.rungs)
             self._persist(rec)
             self._report(0, rung)
 
@@ -488,7 +524,7 @@ class Trailblazer:
                 raise RuntimeError(f'trailblaze: {self.max_rungs} rungs without reaching T_max; '
                                    f'raise max_rungs or target_acc')
             prev = rec.rungs[-1]
-            sigma_o = prev.sigma_step if prev.sigma_step is not None else self.pooled_sigma(rec.rungs)
+            sigma_o = prev.sigma_step if prev.sigma_step is not None else self.step_sigma(rec.rungs)[0]
             step_scale = self.shrink ** (-stage)
             T_n, crossed = next_temperature(prev.T, sigma_o, self.dL, self.T_max, step_scale=step_scale,
                                             max_dT=self.max_dT, min_dT=self.min_dT)
@@ -519,7 +555,7 @@ class Trailblazer:
             index = len(rec.rungs)
             rung.seed_path = self._save_seed(index, seed_n, H_n)
             rec.rungs.append(rung)
-            rung.sigma_step = self.pooled_sigma(rec.rungs)
+            rung.sigma_step, rung.cv_slope = self.step_sigma(rec.rungs)
             self._persist(rec)
             self._report(index, rung)
             H_prev, seed, stage = H_n, seed_n, 0
@@ -558,7 +594,8 @@ class Trailblazer:
     def _report(self, index: int, r: Rung) -> None:
         acc = '' if r.acc_est is None else f' acc {r.acc_est:.3f} (pred {r.acc_pred:.3f}) dL {r.dL:.3f}'
         rej = f' [{r.rejects} rejected]' if r.rejects else ''
-        pooled = '' if r.sigma_step is None or self.sigma_window == 1 else f' (pooled {r.sigma_step:.0f})'
+        pooled = '' if r.sigma_step is None or (self.sigma_window == 1 and self.sigma_source == 'pooled') \
+            else f' (step {r.sigma_step:.0f})'
         self.printf(f'trailblaze: rung {index:3d}  {r.T:8.3f} K  sigma_H {r.sigma:7.1f}{pooled} kJ/mol  '
                     f'n {r.n_samples} neff {r.neff:.0f}{acc}{rej}  {r.wall_s:.0f} s')
 
