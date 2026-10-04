@@ -177,8 +177,15 @@ class Randolph():
         self.reporter = MultiStateReporter(self.output_ncdf,
                                            checkpoint_interval=self.checkpoint_interval,
                                            analysis_particle_indices=atom_inds)
+        # One SamplerState per replica. Passing only sampler_states[0] -- as this
+        # did until 2026-10 -- made openmmtools round-robin that single
+        # configuration onto every replica (replicaexchange.py: sampler_states[i %
+        # len(sampler_states)]), so every block restarted all replicas from the
+        # state-0 configuration and velocities and the hot rungs spent ~8 of
+        # 17-19 iterations re-heating. The saved energies show it: iteration 0
+        # of every block had identical enthalpy on all replicas.
         self.simulation.create(thermodynamic_state=self.reference_state,
-                               sampler_states=self.sampler_states[0],
+                               sampler_states=self.sampler_states,
                                storage=self.reporter,
                                temperatures=self.temperatures,
                                n_temperatures=self.n_replicates)

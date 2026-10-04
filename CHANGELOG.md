@@ -11,6 +11,23 @@ made unreproducible a production run.
 
 ### Fixed
 
+- **Every PTRE block restarted all replicas from the state-0 configuration.**
+  `Randolph._build_simulation` passed `sampler_states=self.sampler_states[0]`,
+  a single `SamplerState`, and openmmtools round-robins that onto every
+  replica (`replicaexchange.py`: `sampler_states[i % len(sampler_states)]`).
+  So at the start of every block all 110+ replicas carried the configuration
+  and velocities that had ended the previous block at the coldest rung, and
+  the hot rungs spent ~8 of their 17–19 iterations re-heating. The saved
+  energies show it on every local run: iteration 0 has identical enthalpy on
+  all replicas (−30 to −37 σ), decaying to zero only by iteration ~8
+  (`chimpss-ladder-audit`, "restart transient"). Now the full list is passed,
+  so each replica resumes from its own configuration; with a trailblazed
+  ladder block 0 starts each rung from the walk's seed, already equilibrated
+  at that temperature. Resumed runs: a run continued under this code starts
+  its next block from per-replica configurations where the old code would
+  have collapsed them, so its trajectory diverges from what the old code
+  would have produced; cycle-0 measured acceptance also drops slightly
+  because the identical-configuration first swap no longer accepts for free.
 - **`MotorRow` could not start on an NVIDIA node.** `motorrow.py` hardcoded
   `Platform.getPlatformByName('OpenCL')` in both `_minimize` and `_run_step`.
   Where the OpenCL plugin ships but no OpenCL ICD is installed — the ordinary

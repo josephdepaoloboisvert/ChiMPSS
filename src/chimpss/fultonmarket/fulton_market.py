@@ -504,7 +504,10 @@ class FultonMarket():
             One SamplerState per replica, containing positions, box vectors,
             and (after sim_no > 0) velocities.
         """
-        if self.sim_no == 0:
+        if self.sim_no == 0 and self.ladder_mode == 'trailblaze' and self._trailblaze_seeds_available():
+            printf('Setting initial positions from the trailblaze seeds (one equilibrated configuration per rung).')
+            self.sampler_states = self._sampler_states_from_seeds()
+        elif self.sim_no == 0:
             printf('Setting initial positions via Context method.')
             self.sampler_states = [SamplerState(positions=self.init_positions,
                                                 box_vectors=self.init_box_vectors).from_context(self.context)
@@ -516,6 +519,27 @@ class FultonMarket():
                                                        self.init_box_vectors,
                                                        self.init_velocities)
 
+
+    def _trailblaze_seeds_available(self):
+        from chimpss.fultonmarket.trailblaze import SeedStore
+        return SeedStore(self.trailblaze_dir).has_all(self.n_replicates)
+
+    def _sampler_states_from_seeds(self):
+        """One SamplerState per rung from the walk's seeds, so block 0 starts each replica
+        from a configuration already equilibrated at its own temperature."""
+        from chimpss.fultonmarket.trailblaze import SeedStore
+        store = SeedStore(self.trailblaze_dir)
+        states = []
+        for k in range(self.n_replicates):
+            seed, _ = store.load(k)
+            if seed.positions.shape[0] != self.n_atoms:
+                raise RuntimeError(f'trailblaze seed {k} has {seed.positions.shape[0]} atoms, system has {self.n_atoms}')
+            kwargs = dict(positions=seed.positions * unit.nanometer,
+                          box_vectors=seed.box_vectors * unit.nanometer)
+            if seed.velocities is not None:
+                kwargs['velocities'] = seed.velocities * (unit.nanometer / unit.picosecond)
+            states.append(SamplerState(**kwargs))
+        return states
 
     def _build_thermodynamic_states(self):
         """
