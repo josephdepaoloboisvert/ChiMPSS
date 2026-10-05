@@ -379,6 +379,14 @@ corrections found by the validation run:
 | Walk acceptance vs block-0 production acceptance | mean difference +0.004 |
 | Ladder size vs the adaptive-ladder replicates | 59 vs 110 (rep0) and 120 (rep3) |
 
+Block 1 (the resume path, 29 iterations) ended the run on the 25 ns cap at 01:45 on 2026-10-05:
+mean acceptance 0.409 (min 0.224, max 0.719), restart signature +0.02 σ, and one insertion at
+337.8 K after 15 iterations in which the pair's readings were 0.284, 0.214 and 0.204 with the
+upper bound falling to 0.291, i.e. the safety net acting on evidence (that pair had read 0.365 in
+block 0). The run therefore ends with 60 rungs; both saved ladders satisfy the analysis layer's
+subset rule, and each block gives every replica 0.5 ns of sampling against 0.28 ns on rep3's
+120-rung ladder.
+
 Open items: seven pairs read below 0.30 in block 0 (single-block SE ≈ 0.05); the trailing audit
 (`analysis/ladder/<block>.json`, `pairs_below_threshold`) over five blocks (SE ≈ 0.03) is the
 right basis for deciding whether any deserves a rung, since the `ucb` rule at 30 iterations can
