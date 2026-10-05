@@ -449,3 +449,44 @@ def test_insertion_candidates_validates():
         L.insertion_candidates(np.zeros((3, 4)), 0.3)
     one = L.insertion_candidates(np.full((1, 4, 4), 0.1), 0.3, rule='ucb', min_iters=1)
     assert one['insert_after'].size == 0 and np.all(np.isinf(one['upper']))
+
+
+def _write_audit(run_dir, block, T, A_pool, key=None):
+    d = os.path.join(run_dir, 'analysis', 'ladder')
+    os.makedirs(d, exist_ok=True)
+    rec = {'block': block, 'ladder_key': key or np.round(T, 2).tolist(), 'temperatures': list(map(float, T)),
+           'A_pool': list(map(float, A_pool)), 'trailing_blocks': [block]}
+    with open(os.path.join(d, f'{block:04d}.json'), 'w') as fh:
+        json.dump(rec, fh)
+
+
+def test_trailing_insertion_waits_for_enough_blocks_then_flags_a_bad_pair(tmp_path):
+    T = np.linspace(310, 320, 11)
+    rng = np.random.default_rng(1)
+    run = str(tmp_path)
+    for b in range(5):
+        A = np.clip(rng.normal(0.40, 0.05, T.size - 1), 0, 1)
+        A[3] = rng.normal(0.15, 0.03)             # one genuinely bad pair
+        A[7] = rng.normal(0.28, 0.05)             # a borderline pair: must not be split
+        _write_audit(run, b, T, A)
+    assert L.insertion_from_audits(run, 1, 0.30, min_blocks=3)['insert_after'].size == 0   # 2 blocks only
+    res = L.insertion_from_audits(run, 4, 0.30, min_blocks=3)
+    assert res['n_blocks'] == 5
+    assert res['insert_after'].tolist() == [3]
+    assert res['upper'][7] >= 0.30
+    assert np.all(res['upper'] >= res['mean'])
+
+
+def test_trailing_insertion_restarts_its_window_after_a_ladder_change(tmp_path):
+    T = np.linspace(310, 320, 11)
+    run = str(tmp_path)
+    for b in range(3):
+        _write_audit(run, b, T, np.full(T.size - 1, 0.1))
+    T2 = np.sort(np.append(T, 315.5))
+    _write_audit(run, 3, T2, np.full(T2.size - 1, 0.1))
+    res = L.insertion_from_audits(run, 3, 0.30, min_blocks=3)
+    assert res['n_blocks'] == 1 and res['insert_after'].size == 0
+    res = L.insertion_from_audits(run, 2, 0.30, min_blocks=3)
+    assert res['n_blocks'] == 3 and res['insert_after'].size == T.size - 1
+    with pytest.raises(ValueError):
+        L.insertion_candidates(np.zeros((3, 4, 4)), 0.3, rule='trailing')

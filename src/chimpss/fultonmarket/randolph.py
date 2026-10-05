@@ -52,8 +52,10 @@ class Randolph():
         ``'mean'`` (historical) inserts when the mean acceptance over the
         block's iterations so far is below the threshold; ``'ucb'`` inserts
         only when the upper confidence bound (mean + 2 SE across iterations)
-        is below it and at least ``insertion_min_iters`` iterations exist.
-        See ``chimpss.analysis.ladder.insertion_candidates``.
+        is below it and at least ``insertion_min_iters`` iterations exist;
+        ``'off'`` only reports the rates (FultonMarket then decides between
+        blocks from the trailing audit). See
+        ``chimpss.analysis.ladder.insertion_candidates``.
     insertion_min_iters : int
         Iterations required before the ``'ucb'`` rule may insert. Default 10.
     """
@@ -238,7 +240,8 @@ class Randolph():
         accepted, proposed = self.reporter.read_mixing_statistics()
         with np.errstate(divide='ignore', invalid='ignore'):
             per_iter = np.nan_to_num(accepted[1:] / proposed[1:])     # (n_iter, K, K), per iteration
-        res = insertion_candidates(per_iter, acceptance_rate_thresh, rule=self.insertion_rule,
+        rule = 'mean' if self.insertion_rule == 'off' else self.insertion_rule
+        res = insertion_candidates(per_iter, acceptance_rate_thresh, rule=rule,
                                    min_iters=self.insertion_min_iters)
 
         for state in range(len(temperatures) - 1):
@@ -246,6 +249,8 @@ class Randolph():
             extra = '' if self.insertion_rule == 'mean' else f' (upper {upper:.4f}, n={res["n_iters"]})'
             printf(f'Exchange {np.round(temperatures[state], 2)} K <-> {np.round(temperatures[state + 1], 2)} K : '
                    f'{rate:.4f}{extra}')
+        if self.insertion_rule == 'off':
+            return np.array([], dtype=int)
         if self.insertion_rule != 'mean' and res['n_iters'] < self.insertion_min_iters:
             printf(f'Insertion test deferred: {res["n_iters"]} of {self.insertion_min_iters} iterations')
         return np.asarray(res['insert_after']) + 1

@@ -12,7 +12,11 @@ from openmmtools.states import SamplerState, ThermodynamicState
 from chimpss.fultonmarket.analysis import FultonMarketAnalysis
 from chimpss.fultonmarket.randolph import Randolph
 from chimpss.fultonmarket.utils import *
-from chimpss.fultonmarket.utils import MBARWeightsDegenerate
+from chimpss.fultonmarket.utils import (
+    MBARWeightsDegenerate,
+    _interpolate_new_positions,
+    _interpolate_new_states,
+)
 from chimpss.shared.io import build_output_path, file_exists_skip, validate_name
 
 
@@ -168,6 +172,7 @@ class FultonMarket():
             init_overlap_thresh: float = None,
             term_overlap_thresh: float = None,
             insertion_rule: str = None,
+            insertion_min_blocks: int = 3,
             output_dir: str = os.path.join(os.getcwd(), 'FultonMarket_output/'),
             n_resample: int = 1000,
             max_equil_fraction: float = 0.75,
@@ -213,9 +218,16 @@ class FultonMarket():
             ``'mean'`` (the historical test: insert when the block's mean
             acceptance so far is below threshold) or ``'ucb'`` (insert only
             when the mean plus two standard errors across iterations is below
-            threshold, after at least ten iterations). None (default) resolves
-            to ``'mean'`` for geometric and file ladders and ``'ucb'`` for a
-            trailblazed one, whose rungs were already measured at target.
+            threshold, after at least ten iterations) or ``'trailing'`` (no
+            mid-block insertion; after each block, a pair whose acceptance
+            pooled over the trailing blocks with the same ladder, at least
+            ``insertion_min_blocks`` of them, is below threshold by more than
+            two standard errors gets a rung before the next block, so nothing
+            is discarded). None (default) resolves to ``'mean'`` for geometric
+            and file ladders and ``'trailing'`` for a trailblazed one, whose
+            rungs were already measured at target.
+        insertion_min_blocks : int
+            Blocks the ``'trailing'`` rule needs before it may insert. Default 3.
         output_dir : str
             Path to output directory. Default: 'FultonMarket_output/' in cwd.
         n_resample : int
@@ -254,6 +266,8 @@ class FultonMarket():
         self.init_overlap_thresh = init_overlap_thresh
         self.term_overlap_thresh = term_overlap_thresh
         self.insertion_rule = insertion_rule
+        self.insertion_min_blocks = int(insertion_min_blocks)
+        self._pending_insert_after = []
         self.minimum_fraction4convergence = minimum_fraction
         self.n_resample = n_resample
         self.max_equil_fraction = max_equil_fraction
@@ -338,6 +352,7 @@ class FultonMarket():
         while not self.finished:
             if self.sim_no > 0:
                 self._load_initial_args()
+                self._apply_pending_insertions()
 
             self._build_states()
             self._set_parameters()
@@ -348,6 +363,8 @@ class FultonMarket():
 
             self._save_sub_simulation()
             self._audit_ladder()
+            if self.insertion_rule == 'trailing':
+                self._pending_insert_after = list(self._plan_insertions())
             at_max_time = (self.total_sim_time is not None
                            and self.sim_no >= self.total_n_sims)
             # The published criterion runs in every mode: it writes the
@@ -464,12 +481,50 @@ class FultonMarket():
         if self.term_overlap_thresh is None:
             self.term_overlap_thresh = float(floor) if floor is not None else 0.35
         if self.insertion_rule is None:
-            self.insertion_rule = 'ucb' if floor is not None else 'mean'
+            self.insertion_rule = 'trailing' if floor is not None else 'mean'
         if self.insertion_rule not in INSERTION_RULES:
             raise ValueError(f'unknown insertion_rule {self.insertion_rule!r}; choose from {INSERTION_RULES}')
         if self.ladder_mode == 'file' and floor is None:
             printf('NOTE: a file ladder carries no acceptance target; pass init/term_overlap_thresh '
                    'if the geometric defaults (0.5/0.35) would insert rungs it does not need')
+
+    @mpiplus.on_single_node(rank=0, broadcast_result=True, sync_nodes=True)
+    def _plan_insertions(self):
+        """Pairs to split before the next block, from the trailing per-block audits (rank 0)."""
+        try:
+            from chimpss.analysis.ladder import insertion_from_audits
+            res = insertion_from_audits(self.output_dir, self.sim_no, self.term_overlap_thresh,
+                                        min_blocks=self.insertion_min_blocks)
+        except Exception as exc:
+            printf(f'WARNING: trailing insertion test could not run for block {self.sim_no}: {exc}')
+            return []
+        if res['n_blocks'] < self.insertion_min_blocks:
+            printf(f"Trailing insertion test deferred: {res['n_blocks']} of {self.insertion_min_blocks} blocks "
+                   f"on this ladder")
+            return []
+        T = res['temperatures']
+        for k in res['insert_after']:
+            printf(f"Trailing insertion: pair {T[k]:.2f}-{T[k + 1]:.2f} K reads {res['mean'][k]:.3f} "
+                   f"(upper {res['upper'][k]:.3f}) over {res['n_blocks']} blocks; a rung will be added "
+                   f"before the next block")
+        if res['insert_after'].size == 0:
+            printf(f"Trailing insertion test over {res['n_blocks']} block(s): no pair below "
+                   f"{self.term_overlap_thresh} by more than two standard errors")
+        return [int(k) for k in res['insert_after']]
+
+    def _apply_pending_insertions(self):
+        """Add the rungs the trailing audit asked for, seeded from the rung below, before the block starts."""
+        if not self._pending_insert_after:
+            return
+        insert_inds = np.array([k + 1 for k in self._pending_insert_after], dtype=int)
+        self._pending_insert_after = []
+        prev_temps = np.array([t._value for t in self.temperatures])
+        self.temperatures, self.n_replicates = _interpolate_new_states(prev_temps, insert_inds)
+        velos = None if self.init_velocities is None else np.asarray(self.init_velocities._value)
+        self.init_positions, self.init_box_vectors, self.init_velocities = _interpolate_new_positions(
+            np.asarray(self.init_positions._value), np.asarray(self.init_box_vectors._value), velos,
+            insert_inds, self.n_replicates)
+        printf(f'Ladder now {self.n_replicates} rungs after inserting at {[round(float(t._value), 2) for i, t in enumerate(self.temperatures) if i in set(insert_inds + np.arange(len(insert_inds)))]} K')
 
     def _set_parameters(self):
         """
@@ -491,7 +546,7 @@ class FultonMarket():
                            checkpoint_ncdf=self.checkpoint_ncdf,
                            iter_length=self.iter_length,
                            dt=self.dt,
-                           insertion_rule=self.insertion_rule)
+                           insertion_rule='off' if self.insertion_rule == 'trailing' else self.insertion_rule)
 
 
     def _build_states(self):

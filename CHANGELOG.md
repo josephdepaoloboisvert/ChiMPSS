@@ -46,6 +46,18 @@ made unreproducible a production run.
 
 ### Added
 
+- **Between-block rung insertion from the trailing audit** (`--insertion_rule
+  trailing`, now the default for walked ladders; `--insertion_min_blocks`).
+  Even the confidence-aware mid-block test is fooled by a walker whose
+  enthalpy is off for its rung: it exchanges readily downward and rarely
+  upward, so it stays, and the pair reads 0.2 for ten iterations although it
+  averages 0.4 over blocks. On rep4 this split a sound pair in block 1 and
+  another in block 2, each time discarding the partial block. The trailing
+  rule never inserts mid-block; after each block it pools every pair's
+  per-block acceptance over the trailing blocks on the same ladder (at least
+  three) and adds a rung before the next block only when that mean is below
+  the floor by more than two standard errors. Nothing is discarded, and the
+  walker has moved on by the time the pair is judged.
 - **Confidence-aware rung insertion** (`--insertion_rule ucb`,
   `chimpss.analysis.ladder.insertion_candidates`). The adaptive insertion test
   judged each neighbour pair on the block's mean acceptance so far, after

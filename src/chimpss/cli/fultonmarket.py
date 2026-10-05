@@ -44,12 +44,17 @@ def parse_args():
                         'Default: 0.5, or the walk\'s --min_acc for a trailblazed ladder.')
     p.add_argument('--term_overlap_thresh', default=None, type=float,
                    help='Same for later blocks. Default: 0.35, or --min_acc for a trailblazed ladder.')
-    p.add_argument('--insertion_rule', default=None, choices=['mean', 'ucb'],
-                   help="How a pair is judged for insertion after each cycle. 'mean': the historical "
-                        "test on the block's mean acceptance so far. 'ucb': insert only when the mean "
-                        "plus two standard errors across iterations is below threshold, after at least "
-                        "ten iterations, so a single noisy cycle cannot split a sound ladder. Default: "
-                        "'mean' for geometric and file ladders, 'ucb' for a trailblazed one.")
+    p.add_argument('--insertion_rule', default=None, choices=['mean', 'ucb', 'trailing'],
+                   help="How a pair is judged for insertion. 'mean': the historical mid-block test on "
+                        "the block's mean acceptance so far. 'ucb': mid-block, but only when the mean plus "
+                        "two standard errors across iterations is below threshold after ten iterations. "
+                        "'trailing': no mid-block insertion; after each block, a pair whose acceptance "
+                        "pooled over the trailing blocks (at least --insertion_min_blocks) is below "
+                        "threshold by more than two standard errors gets a rung before the next block, "
+                        "so no sampling is discarded. Default: 'mean' for geometric and file ladders, "
+                        "'trailing' for a trailblazed one.")
+    p.add_argument('--insertion_min_blocks', default=3, type=int,
+                   help="Blocks the 'trailing' rule needs on the current ladder before it may insert. Default 3.")
 
     # Trailblazing
     t = p.add_argument_group('trailblazing (--ladder trailblaze)')
@@ -290,6 +295,7 @@ def main():
                init_overlap_thresh=args.init_overlap_thresh,
                term_overlap_thresh=args.term_overlap_thresh,
                insertion_rule=args.insertion_rule,
+               insertion_min_blocks=args.insertion_min_blocks,
                n_resample=args.n_resample,
                max_equil_fraction=args.max_equil_fraction,
                min_ess=args.min_ess,

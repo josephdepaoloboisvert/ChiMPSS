@@ -392,3 +392,13 @@ Open items: seven pairs read below 0.30 in block 0 (single-block SE ≈ 0.05); t
 right basis for deciding whether any deserves a rung, since the `ucb` rule at 30 iterations can
 only act on pairs below ≈ 0.18. A walk with `--tb_sigma_source slope` should land closer to
 0.40 on every pair and is the recommended setting for the next replicate.
+
+**2026-10-05, continuation to ten blocks.** Mid-block insertion, even confidence-aware, split a
+sound pair in block 1 and another in block 2: a walker whose enthalpy is off for its rung exchanges
+readily downward and rarely upward, so it stays and the pair reads ~0.2 for ten iterations although
+it averages 0.4 over blocks. The user chose between-block insertion (`insertion_rule='trailing'`,
+now the default for walked ladders): no mid-block insertion; after each block, a pair whose
+per-block pooled acceptance over the trailing blocks on the same ladder (≥ 3) is below the floor by
+more than two standard errors gets a rung before the next block, seeded from the rung below, so
+nothing is discarded. rep4 was restarted from block 1 (60 rungs) under this rule with a 225 ns cap
+(ten blocks).

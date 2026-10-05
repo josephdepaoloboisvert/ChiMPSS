@@ -150,3 +150,21 @@ def test_rmsd_2d_identical():
     result = rmsd(a, a)
     for v in result:
         assert v == pytest.approx(0.0, abs=1e-10)
+
+
+# ── insertion of rungs between blocks (the arrays FultonMarket carries) ──────
+
+def test_interpolation_helpers_insert_consistently_for_several_pairs():
+    import openmm.unit as unit
+    from chimpss.fultonmarket.utils import _interpolate_new_positions, _interpolate_new_states
+    temps = np.array([310.0, 311.0, 312.0, 313.0, 314.0])
+    pos = np.arange(5)[:, None, None] * np.ones((5, 3, 3))
+    box = np.arange(5)[:, None, None] * np.ones((5, 3, 3))
+    vel = np.arange(5)[:, None, None] * np.ones((5, 3, 3))
+    insert_inds = np.array([1, 3])                      # split pairs (0,1) and (2,3)
+    new_t, n = _interpolate_new_states(temps, insert_inds)
+    assert n == 7
+    assert [round(t.value_in_unit(unit.kelvin), 2) for t in new_t] == [310.0, 310.5, 311.0, 312.0, 312.5, 313.0, 314.0]
+    p2, b2, v2 = _interpolate_new_positions(pos, box, vel, insert_inds, n)
+    assert p2.shape[0] == 7 and v2.shape[0] == 7
+    assert [int(p2._value[i, 0, 0]) for i in range(7)] == [0, 0, 1, 2, 2, 3, 4]   # new rungs copy the rung below

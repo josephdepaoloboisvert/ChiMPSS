@@ -66,7 +66,7 @@ __all__ = [
     'pair_acceptance_from_energies', 'pair_acceptance_from_enthalpy',
     'respace', 'virtual_pair_acceptance',
     'LadderData', 'load_run', 'ladder_report', 'format_table', 'block_audit',
-    'parse_blocks', 'insertion_candidates', 'INSERTION_RULES',
+    'parse_blocks', 'insertion_candidates', 'INSERTION_RULES', 'insertion_from_audits',
 ]
 
 #: Gas constant in kJ/(mol K).  Equals ``openmmtools.constants.kB`` and
@@ -417,7 +417,7 @@ def pair_acceptance_from_energies(energies: ArrayOrList, states: ArrayOrList,
 # Adaptive insertion
 # ---------------------------------------------------------------------------
 
-INSERTION_RULES = ('mean', 'ucb')
+INSERTION_RULES = ('mean', 'ucb', 'trailing')
 
 
 def insertion_candidates(per_iter_acc: np.ndarray, threshold: float, rule: str = 'mean',
@@ -444,8 +444,8 @@ def insertion_candidates(per_iter_acc: np.ndarray, threshold: float, rule: str =
     ``'mean'``), ``n_iters`` and ``insert_after`` (rung indices ``k`` whose
     pair ``(k, k+1)`` should be split, i.e. the engine inserts at ``k+1``).
     """
-    if rule not in INSERTION_RULES:
-        raise ValueError(f"rule must be one of {INSERTION_RULES}")
+    if rule not in ('mean', 'ucb'):
+        raise ValueError("rule must be 'mean' or 'ucb' (the 'trailing' rule is decided by insertion_from_audits)")
     a = np.asarray(per_iter_acc, dtype=np.float64)
     if a.ndim != 3 or a.shape[1] != a.shape[2]:
         raise ValueError('per_iter_acc must be (n_iter, K, K)')
@@ -465,6 +465,49 @@ def insertion_candidates(per_iter_acc: np.ndarray, threshold: float, rule: str =
         flag = (upper < threshold) & (n >= int(min_iters))
     return {'acceptance': mean, 'upper': upper, 'n_iters': int(n),
             'insert_after': np.where(flag)[0]}
+
+
+def insertion_from_audits(run_dir: str, block: int, threshold: float, min_blocks: int = 3,
+                          max_blocks: int = 5, z: float = 2.0) -> Dict[str, object]:
+    """Which pairs to split before the next block, judged on the trailing per-block audits.
+
+    Reads ``analysis/ladder/<b>.json`` for ``block`` and the blocks before it
+    that share its ladder (up to ``max_blocks``), and for every neighbour pair
+    takes the per-block pooled acceptances.  A pair is flagged when at least
+    ``min_blocks`` such values exist and their mean plus ``z`` standard errors
+    (standard deviation across blocks over the square root of their count)
+    is below ``threshold``: shown bad over several blocks, not read low in one.
+    Mid-block judgements are fooled by a walker whose enthalpy is off for its
+    rung and therefore stays there; judged between blocks nothing is
+    discarded and the walker has had time to move on.
+
+    Returns ``insert_after`` (pair indices ``k`` whose pair ``(k, k+1)`` is
+    split), ``n_blocks`` used, ``mean``, ``upper`` per pair and the ``temperatures``.
+    """
+    hist = os.path.join(run_dir, 'analysis', 'ladder')
+    with open(os.path.join(hist, f'{int(block):04d}.json')) as fh:
+        rec = json.load(fh)
+    key = rec['ladder_key']
+    values = [np.asarray(rec['A_pool'], dtype=np.float64)]
+    for b in range(int(block) - 1, max(int(block) - int(max_blocks), -1), -1):
+        path = os.path.join(hist, f'{b:04d}.json')
+        if not os.path.exists(path):
+            break
+        with open(path) as fh:
+            prev = json.load(fh)
+        if prev.get('ladder_key') != key:
+            break
+        values.append(np.asarray(prev['A_pool'], dtype=np.float64))
+    stack = np.vstack(values)
+    n = stack.shape[0]
+    mean = stack.mean(axis=0)
+    if n >= 2:
+        upper = mean + z * stack.std(axis=0, ddof=1) / np.sqrt(n)
+    else:
+        upper = np.full(mean.shape, np.inf)
+    flag = (upper < threshold) if n >= int(min_blocks) else np.zeros(mean.shape, dtype=bool)
+    return {'insert_after': np.where(flag)[0], 'n_blocks': int(n), 'mean': mean, 'upper': upper,
+            'temperatures': np.asarray(rec['temperatures'], dtype=np.float64)}
 
 
 # ---------------------------------------------------------------------------
