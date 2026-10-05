@@ -349,3 +349,38 @@ Compare per-replica ns per block against an existing run (25 ns / 58 ≈ 0.43 ns
 - **Reference-paper mismatch**: neither PDF names "trailblazing"; the plan cites Shenfeld for the
   metric/equidistance/acceptance bounds, Nguyen & Minh for the ≥ 35 % sufficiency result, and
   AlGDock's `initialization.py` for the sequential procedure.
+
+## Status (2026-10-04, end of day)
+
+All five phases landed on `feat/thermodynamic-trailblazing` (seven commits), plus two
+corrections found by the validation run:
+
+- **σ pooling and the slope source.** Stepping on each rung's own σ (≈50 effective samples)
+  scattered the spacing by ~10 % and provoked rejections; the step now uses σ pooled over the
+  last five accepted rungs (`--tb_sigma_window`). The walk's variance-based σ also runs 5–10 %
+  below the production metric, because one 100–300 ps trajectory misses the slow configurational
+  variance a block samples across walkers; the enthalpy-slope estimate
+  σ = √(k_B T² d⟨H⟩/dT) tracks production within 1–4 % and is available as
+  `--tb_sigma_source slope` (default remains `pooled`, the validated setting).
+- **Confidence-aware insertion.** The historical insertion test judged pairs on a single
+  five-iteration cycle (SE 0.15–0.2) and split ten of 58 walked pairs whose readings had a
+  median of 0.415 against the 0.30 floor; it is also why the geometric ladders grew to 110–132.
+  Walked ladders now use `insertion_rule='ucb'` (insert only when mean + 2 SE across iterations
+  is below threshold after ≥ 10 iterations); geometric and file ladders keep `'mean'`.
+
+**Validation, NTSR1_ML-301.hmr.rep4** (`CHIMPSS_LADDER=trailblaze`, local RTX 5060 Ti):
+
+| Quantity | Result |
+|---|---|
+| Walk | 59 rungs, 310→367 K, 75 min; 10 rejections; acceptance 0.31–0.51 (median 0.39) by the walk's measure |
+| Reweighted prediction from rep0 / rep3 samples | mean 0.40, min 0.34–0.36, no pair < 0.30 |
+| Block 0 (30 iterations, per-rung seeds, `ucb` rule) | no insertion; pooled neighbour acceptance mean 0.402, median 0.394, min 0.235, max 0.614; ΔL mean 1.226 (CV 0.14) |
+| Restart signature at iteration 0 | +0.08 σ (every pre-fix run: −30 to −37 σ, ~8 iterations to re-heat) |
+| Walk acceptance vs block-0 production acceptance | mean difference +0.004 |
+| Ladder size vs the adaptive-ladder replicates | 59 vs 110 (rep0) and 120 (rep3) |
+
+Open items: seven pairs read below 0.30 in block 0 (single-block SE ≈ 0.05); the trailing audit
+(`analysis/ladder/<block>.json`, `pairs_below_threshold`) over five blocks (SE ≈ 0.03) is the
+right basis for deciding whether any deserves a rung, since the `ucb` rule at 30 iterations can
+only act on pairs below ≈ 0.18. A walk with `--tb_sigma_source slope` should land closer to
+0.40 on every pair and is the recommended setting for the next replicate.
