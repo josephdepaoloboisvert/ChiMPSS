@@ -167,6 +167,7 @@ class FultonMarket():
             minimum_fraction: float = 0.25,
             init_overlap_thresh: float = None,
             term_overlap_thresh: float = None,
+            insertion_rule: str = None,
             output_dir: str = os.path.join(os.getcwd(), 'FultonMarket_output/'),
             n_resample: int = 1000,
             max_equil_fraction: float = 0.75,
@@ -208,6 +209,13 @@ class FultonMarket():
             Minimum acceptance rate at any point after the first sub-simulation
             before triggering a restart. None (default) resolves to 0.35, or to
             the walk's ``min_acc`` when the ladder was trailblazed.
+        insertion_rule : str, optional
+            ``'mean'`` (the historical test: insert when the block's mean
+            acceptance so far is below threshold) or ``'ucb'`` (insert only
+            when the mean plus two standard errors across iterations is below
+            threshold, after at least ten iterations). None (default) resolves
+            to ``'mean'`` for geometric and file ladders and ``'ucb'`` for a
+            trailblazed one, whose rungs were already measured at target.
         output_dir : str
             Path to output directory. Default: 'FultonMarket_output/' in cwd.
         n_resample : int
@@ -245,6 +253,7 @@ class FultonMarket():
         self.sim_length = sim_length
         self.init_overlap_thresh = init_overlap_thresh
         self.term_overlap_thresh = term_overlap_thresh
+        self.insertion_rule = insertion_rule
         self.minimum_fraction4convergence = minimum_fraction
         self.n_resample = n_resample
         self.max_equil_fraction = max_equil_fraction
@@ -322,7 +331,8 @@ class FultonMarket():
         self._resolve_overlap_thresholds()
         printf(f'ladder              : {self.ladder_mode}, {self.n_replicates} rungs '
                f'{self.temperatures[0]._value:.2f}-{self.temperatures[-1]._value:.2f} K; '
-               f'insertion thresholds {self.init_overlap_thresh}/{self.term_overlap_thresh}')
+               f'insertion thresholds {self.init_overlap_thresh}/{self.term_overlap_thresh} '
+               f'(rule {self.insertion_rule})')
         self._setup_panel()
 
         while not self.finished:
@@ -447,11 +457,16 @@ class FultonMarket():
 
     def _resolve_overlap_thresholds(self):
         """None means: the geometric defaults, or the walk's floor for a trailblazed ladder."""
+        from chimpss.analysis.ladder import INSERTION_RULES
         floor = self.ladder_meta.get('min_acc')
         if self.init_overlap_thresh is None:
             self.init_overlap_thresh = float(floor) if floor is not None else 0.5
         if self.term_overlap_thresh is None:
             self.term_overlap_thresh = float(floor) if floor is not None else 0.35
+        if self.insertion_rule is None:
+            self.insertion_rule = 'ucb' if floor is not None else 'mean'
+        if self.insertion_rule not in INSERTION_RULES:
+            raise ValueError(f'unknown insertion_rule {self.insertion_rule!r}; choose from {INSERTION_RULES}')
         if self.ladder_mode == 'file' and floor is None:
             printf('NOTE: a file ladder carries no acceptance target; pass init/term_overlap_thresh '
                    'if the geometric defaults (0.5/0.35) would insert rungs it does not need')
@@ -475,7 +490,8 @@ class FultonMarket():
                            output_ncdf=self.output_ncdf,
                            checkpoint_ncdf=self.checkpoint_ncdf,
                            iter_length=self.iter_length,
-                           dt=self.dt)
+                           dt=self.dt,
+                           insertion_rule=self.insertion_rule)
 
 
     def _build_states(self):

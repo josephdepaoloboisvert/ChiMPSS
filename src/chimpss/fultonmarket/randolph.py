@@ -47,6 +47,15 @@ class Randolph():
         Time between replica swap attempts in nanoseconds.
     dt : float
         Integration timestep in femtoseconds.
+    insertion_rule : str
+        How a neighbour pair is judged for rung insertion after each cycle:
+        ``'mean'`` (historical) inserts when the mean acceptance over the
+        block's iterations so far is below the threshold; ``'ucb'`` inserts
+        only when the upper confidence bound (mean + 2 SE across iterations)
+        is below it and at least ``insertion_min_iters`` iterations exist.
+        See ``chimpss.analysis.ladder.insertion_candidates``.
+    insertion_min_iters : int
+        Iterations required before the ``'ucb'`` rule may insert. Default 10.
     """
 
     def __init__(self,
@@ -59,7 +68,9 @@ class Randolph():
                  output_ncdf: str,
                  checkpoint_ncdf: str,
                  iter_length: float,
-                 dt: float):
+                 dt: float,
+                 insertion_rule: str = 'mean',
+                 insertion_min_iters: int = 10):
 
         self.sampler_states = sampler_states
         self.reference_state = reference_thermo_state
@@ -72,6 +83,8 @@ class Randolph():
         self.n_replicates = len(self.temperatures)
         self.iter_length = iter_length
         self.dt = dt
+        self.insertion_rule = insertion_rule
+        self.insertion_min_iters = int(insertion_min_iters)
 
         self._configure_simulation_parameters()
         self._build_simulation()
@@ -219,17 +232,23 @@ class Randolph():
         Read mixing statistics from the reporter and identify adjacent replica
         pairs with exchange rates below the given threshold.
         """
+        from chimpss.analysis.ladder import insertion_candidates
+
         temperatures = [float(s.temperature._value) for s in self.reporter.read_thermodynamic_states()[0]]
         accepted, proposed = self.reporter.read_mixing_statistics()
-        acc_rates = np.nan_to_num(np.mean(accepted[1:] / proposed[1:], axis=0))
+        with np.errstate(divide='ignore', invalid='ignore'):
+            per_iter = np.nan_to_num(accepted[1:] / proposed[1:])     # (n_iter, K, K), per iteration
+        res = insertion_candidates(per_iter, acceptance_rate_thresh, rule=self.insertion_rule,
+                                   min_iters=self.insertion_min_iters)
 
-        insert_inds = []
-        for state in range(len(acc_rates) - 1):
-            rate = acc_rates[state, state + 1]
-            printf(f'Exchange {np.round(temperatures[state], 2)} K <-> {np.round(temperatures[state + 1], 2)} K : {rate:.4f}')
-            if rate < acceptance_rate_thresh:
-                insert_inds.append(state + 1)
-        return np.array(insert_inds)
+        for state in range(len(temperatures) - 1):
+            rate, upper = res['acceptance'][state], res['upper'][state]
+            extra = '' if self.insertion_rule == 'mean' else f' (upper {upper:.4f}, n={res["n_iters"]})'
+            printf(f'Exchange {np.round(temperatures[state], 2)} K <-> {np.round(temperatures[state + 1], 2)} K : '
+                   f'{rate:.4f}{extra}')
+        if self.insertion_rule != 'mean' and res['n_iters'] < self.insertion_min_iters:
+            printf(f'Insertion test deferred: {res["n_iters"]} of {self.insertion_min_iters} iterations')
+        return np.asarray(res['insert_after']) + 1
 
 
     @mpiplus.on_single_node(rank=0, broadcast_result=True, sync_nodes=True)

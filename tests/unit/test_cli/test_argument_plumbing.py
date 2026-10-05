@@ -374,6 +374,16 @@ def test_fultonmarket_passes_ladder_arguments_to_the_library(monkeypatch, tmp_pa
     assert seen['init']['ladder'] == 'trailblaze' and seen['init']['temperatures_file'] is None
     assert seen['init']['trailblaze_kwargs']['target_acc'] == 0.4
     assert seen['run']['init_overlap_thresh'] is None and seen['run']['term_overlap_thresh'] == 0.25
+    assert seen['run']['insertion_rule'] is None
+
+
+def test_fultonmarket_insertion_rule_flag(monkeypatch):
+    from chimpss.cli import fultonmarket
+    monkeypatch.setattr('sys.argv', _FM_POSITIONAL + ['--insertion_rule', 'ucb'])
+    assert fultonmarket.parse_args().insertion_rule == 'ucb'
+    monkeypatch.setattr('sys.argv', _FM_POSITIONAL + ['--insertion_rule', 'median'])
+    with pytest.raises(SystemExit):
+        fultonmarket.parse_args()
 
 
 def test_trailblaze_cli_walk_and_from_run_parse():

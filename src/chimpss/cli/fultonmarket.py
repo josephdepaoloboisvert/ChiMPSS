@@ -44,6 +44,12 @@ def parse_args():
                         'Default: 0.5, or the walk\'s --min_acc for a trailblazed ladder.')
     p.add_argument('--term_overlap_thresh', default=None, type=float,
                    help='Same for later blocks. Default: 0.35, or --min_acc for a trailblazed ladder.')
+    p.add_argument('--insertion_rule', default=None, choices=['mean', 'ucb'],
+                   help="How a pair is judged for insertion after each cycle. 'mean': the historical "
+                        "test on the block's mean acceptance so far. 'ucb': insert only when the mean "
+                        "plus two standard errors across iterations is below threshold, after at least "
+                        "ten iterations, so a single noisy cycle cannot split a sound ladder. Default: "
+                        "'mean' for geometric and file ladders, 'ucb' for a trailblazed one.")
 
     # Trailblazing
     t = p.add_argument_group('trailblazing (--ladder trailblaze)')
@@ -283,6 +289,7 @@ def main():
                minimum_fraction=args.minimum_sim_fraction,
                init_overlap_thresh=args.init_overlap_thresh,
                term_overlap_thresh=args.term_overlap_thresh,
+               insertion_rule=args.insertion_rule,
                n_resample=args.n_resample,
                max_equil_fraction=args.max_equil_fraction,
                min_ess=args.min_ess,

@@ -402,3 +402,50 @@ def test_block_audit_accumulates_a_trailing_window(tmp_path):
 def test_parse_blocks():
     assert L.parse_blocks(None) is None
     assert L.parse_blocks(['3', '7:10', '20']) == [3, 7, 8, 9, 20]
+
+
+# ---------------------------------------------------------------------------
+# Adaptive insertion test
+# ---------------------------------------------------------------------------
+
+def per_iteration_acceptance(true_acc, n_iter, K, seed, spread=0.15):
+    """Per-iteration neighbour acceptance around a true value, as the reporter would record it."""
+    rng = np.random.default_rng(seed)
+    a = np.zeros((n_iter, K, K))
+    idx = np.arange(K - 1)
+    a[:, idx, idx + 1] = np.clip(rng.normal(true_acc, spread, size=(n_iter, K - 1)), 0, 1)
+    return a
+
+
+def test_mean_rule_splits_a_sound_ladder_on_five_iterations():
+    a = per_iteration_acceptance(0.40, n_iter=5, K=60, seed=1)
+    res = L.insertion_candidates(a, 0.30, rule='mean')
+    assert 3 <= res['insert_after'].size <= 20           # noise alone flags a good fraction
+    assert res['n_iters'] == 5 and res['acceptance'].shape == (59,)
+    assert np.array_equal(res['upper'], res['acceptance'])
+
+
+def test_ucb_rule_waits_and_then_spares_a_sound_ladder():
+    a = per_iteration_acceptance(0.40, n_iter=5, K=60, seed=1)
+    assert L.insertion_candidates(a, 0.30, rule='ucb', min_iters=10)['insert_after'].size == 0
+    a = per_iteration_acceptance(0.40, n_iter=18, K=60, seed=2)
+    res = L.insertion_candidates(a, 0.30, rule='ucb', min_iters=10)
+    assert res['insert_after'].size <= 1
+    assert np.all(res['upper'] >= res['acceptance'])
+
+
+def test_ucb_rule_still_catches_a_bad_pair():
+    a = per_iteration_acceptance(0.40, n_iter=18, K=12, seed=3)
+    a[:, 5, 6] = np.clip(np.random.default_rng(4).normal(0.08, 0.05, 18), 0, 1)
+    res = L.insertion_candidates(a, 0.30, rule='ucb', min_iters=10)
+    assert 5 in res['insert_after']
+    assert res['insert_after'].size <= 2
+
+
+def test_insertion_candidates_validates():
+    with pytest.raises(ValueError):
+        L.insertion_candidates(np.zeros((3, 4, 4)), 0.3, rule='median')
+    with pytest.raises(ValueError):
+        L.insertion_candidates(np.zeros((3, 4)), 0.3)
+    one = L.insertion_candidates(np.full((1, 4, 4), 0.1), 0.3, rule='ucb', min_iters=1)
+    assert one['insert_after'].size == 0 and np.all(np.isinf(one['upper']))

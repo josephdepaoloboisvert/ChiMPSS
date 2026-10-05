@@ -46,6 +46,19 @@ made unreproducible a production run.
 
 ### Added
 
+- **Confidence-aware rung insertion** (`--insertion_rule ucb`,
+  `chimpss.analysis.ladder.insertion_candidates`). The adaptive insertion test
+  judged each neighbour pair on the block's mean acceptance so far, after
+  every five-iteration cycle, so the first judgement rested on five
+  configuration pairs (standard error 0.15–0.2). On a ladder whose true
+  acceptance sits 0.10 above the threshold that flags about one pair in five
+  by chance; it is why the campaign's 60-rung ladders grew to 110–132 through
+  7–11 block-0 rebuilds, and on the first trailblazed replicate it split ten
+  of 58 pairs whose cycle-0 readings had a median of 0.415 against a 0.30
+  floor. The `ucb` rule inserts only when the mean plus two standard errors
+  across iterations is below threshold and at least ten iterations exist.
+  Default for trailblazed ladders; geometric and file ladders keep the
+  historical `mean` rule unless the flag is passed.
 - **Thermodynamic trailblazing** (`chimpss.fultonmarket.trailblaze`,
   `chimpss-fultonmarket --ladder trailblaze`, `chimpss-trailblaze`). The
   temperature ladder is walked instead of guessed: sample the enthalpy at the

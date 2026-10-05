@@ -66,7 +66,7 @@ __all__ = [
     'pair_acceptance_from_energies', 'pair_acceptance_from_enthalpy',
     'respace', 'virtual_pair_acceptance',
     'LadderData', 'load_run', 'ladder_report', 'format_table', 'block_audit',
-    'parse_blocks',
+    'parse_blocks', 'insertion_candidates', 'INSERTION_RULES',
 ]
 
 #: Gas constant in kJ/(mol K).  Equals ``openmmtools.constants.kB`` and
@@ -411,6 +411,60 @@ def pair_acceptance_from_energies(energies: ArrayOrList, states: ArrayOrList,
     if num is None:
         raise ValueError('no finite samples after skip')
     return {'acceptance': num / cnt, 'n_samples': np.full(K - 1, int(cnt))}
+
+
+# ---------------------------------------------------------------------------
+# Adaptive insertion
+# ---------------------------------------------------------------------------
+
+INSERTION_RULES = ('mean', 'ucb')
+
+
+def insertion_candidates(per_iter_acc: np.ndarray, threshold: float, rule: str = 'mean',
+                         min_iters: int = 10, z: float = 2.0) -> Dict[str, np.ndarray]:
+    """Which neighbour pairs the engine should split, from per-iteration exchange statistics.
+
+    ``per_iter_acc[t, i, j]`` is the acceptance of exchanges between rungs
+    ``i`` and ``j`` observed at iteration ``t`` (accepted/proposed; a pair
+    with no proposals counts 0).  Each iteration contributes one pair of
+    configurations, so ``n`` iterations give an acceptance estimate with a
+    standard error of roughly 0.1–0.2 for ``n`` of 5–18, which is the
+    campaign's block.
+
+    ``rule='mean'`` is the historical test: insert when the mean falls below
+    ``threshold``.  Judged on a single five-iteration cycle it flags about
+    one pair in five of a ladder whose true acceptance is 0.10 above the
+    threshold, which is how the campaign's 60-rung ladders grew to 110–132.
+    ``rule='ucb'`` inserts only when the upper confidence bound
+    ``mean + z * SE`` (SE across iterations) is below ``threshold`` and at
+    least ``min_iters`` iterations have accumulated: a pair has to be shown
+    bad, not merely read low once.
+
+    Returns ``acceptance`` (K-1,), ``upper`` (K-1,; the mean itself under
+    ``'mean'``), ``n_iters`` and ``insert_after`` (rung indices ``k`` whose
+    pair ``(k, k+1)`` should be split, i.e. the engine inserts at ``k+1``).
+    """
+    if rule not in INSERTION_RULES:
+        raise ValueError(f"rule must be one of {INSERTION_RULES}")
+    a = np.asarray(per_iter_acc, dtype=np.float64)
+    if a.ndim != 3 or a.shape[1] != a.shape[2]:
+        raise ValueError('per_iter_acc must be (n_iter, K, K)')
+    n, K = a.shape[0], a.shape[1]
+    idx = np.arange(K - 1)
+    series = a[:, idx, idx + 1]                      # (n, K-1)
+    mean = series.mean(axis=0) if n else np.full(K - 1, np.nan)
+    if rule == 'mean':
+        upper = mean.copy()
+        flag = mean < threshold
+    else:
+        if n >= 2:
+            se = series.std(axis=0, ddof=1) / np.sqrt(n)
+            upper = mean + z * se
+        else:
+            upper = np.full(K - 1, np.inf)
+        flag = (upper < threshold) & (n >= int(min_iters))
+    return {'acceptance': mean, 'upper': upper, 'n_iters': int(n),
+            'insert_after': np.where(flag)[0]}
 
 
 # ---------------------------------------------------------------------------
