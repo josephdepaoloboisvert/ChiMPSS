@@ -25,6 +25,13 @@ def test_pair_spacing_matches_pair_lengths():
         0.5 * 2010.0 * (tb.beta(310.0) - tb.beta(311.0)))
 
 
+def test_pair_spacing_is_unsigned():
+    up = tb.pair_spacing(310.0, 311.0, 1000.0, 1010.0)
+    down = tb.pair_spacing(311.0, 310.0, 1010.0, 1000.0)
+    assert up > 0 and down == pytest.approx(up)
+    assert tb.DIRECTION_SIGN == {'up': 1, 'down': -1} and tb.DIRECTIONS == ('up', 'down', 'both')
+
+
 # ---------------------------------------------------------------------------
 # next_temperature
 # ---------------------------------------------------------------------------
@@ -77,6 +84,47 @@ def test_next_temperature_endpoint_rules():
     assert not crossed and T_n == pytest.approx(360.0 + full_step)
 
 
+def test_next_temperature_down_is_exact_in_beta():
+    T_o, sigma, dL = 367.0, 1300.0, 1.19
+    T_n, crossed = tb.next_temperature(T_o, sigma, dL, 310.0, direction=-1)
+    assert not crossed and T_n < T_o
+    assert tb.beta(T_n) - tb.beta(T_o) == pytest.approx(dL / sigma, rel=1e-12)
+    assert T_o - T_n == pytest.approx(dL * tb.KB * T_o ** 2 / sigma, rel=1e-2)
+    # the same length walked back up lands on the starting rung to first order in the step
+    back, _ = tb.next_temperature(T_n, sigma, dL, 400.0, direction=1)
+    assert back == pytest.approx(T_o, rel=1e-4)
+    # the deprecated keyword alias still works for upward callers
+    assert tb.next_temperature(310.0, 1050.0, 1.19, T_max=367.0) == tb.next_temperature(310.0, 1050.0, 1.19, 367.0)
+    with pytest.raises(TypeError):
+        tb.next_temperature(310.0, 1050.0, 1.19)
+
+
+def test_next_temperature_down_caps_and_refuses():
+    T_n, _ = tb.next_temperature(367.0, 1.0, 1.19, 310.0, max_dT=10.0, direction=-1)   # tiny sigma -> capped
+    assert T_n == 357.0
+    with pytest.raises(ValueError, match='min_dT'):
+        tb.next_temperature(367.0, 1e6, 1.19, 310.0, min_dT=0.1, direction=-1)
+    with pytest.raises(ValueError, match='above'):
+        tb.next_temperature(300.0, 1000.0, 1.19, 310.0, direction=-1)      # already below T_end
+    with pytest.raises(ValueError, match='below'):
+        tb.next_temperature(370.0, 1000.0, 1.19, 367.0, direction=1)
+
+
+def test_next_temperature_down_endpoint_rules():
+    T_n, crossed = tb.next_temperature(310.5, 1050.0, 1.19, 310.0, direction=-1)
+    assert T_n == 310.0 and crossed
+    sigma = 1050.0
+    full_step = 320.0 - tb.next_temperature(320.0, sigma, 1.19, 100.0, direction=-1)[0]
+    T_end = 320.0 - 1.3 * full_step
+    T_n, crossed = tb.next_temperature(320.0, sigma, 1.19, T_end, direction=-1)
+    assert not crossed and T_n == pytest.approx(320.0 - 0.65 * full_step)
+    T_last, crossed = tb.next_temperature(T_n, sigma, 1.19, T_end, direction=-1)
+    assert crossed and T_last == T_end
+    T_end = 320.0 - 1.7 * full_step
+    T_n, crossed = tb.next_temperature(320.0, sigma, 1.19, T_end, direction=-1)
+    assert not crossed and T_n == pytest.approx(320.0 - full_step)
+
+
 # ---------------------------------------------------------------------------
 # pair_acceptance and stationary_window
 # ---------------------------------------------------------------------------
@@ -107,6 +155,30 @@ def test_pair_acceptance_sign_and_subsampling():
     assert sub == pytest.approx(full, abs=0.02)
     with pytest.raises(ValueError):
         tb.pair_acceptance(np.array([np.nan]), hot, 310.0, 311.0)
+
+
+def test_pair_acceptance_reweights_samples_from_a_nearby_temperature():
+    rng = np.random.default_rng(5)
+    T_o, T_n = 330.0, 331.0
+    exact = tb.pair_acceptance(gaussian_samples(T_o, 3000, rng), gaussian_samples(T_n, 3000, rng), T_o, T_n)
+    # source temperatures equal to the pair temperatures change nothing
+    H_o, H_n = gaussian_samples(T_o, 500, rng), gaussian_samples(T_n, 500, rng)
+    plain = tb.pair_acceptance(H_o, H_n, T_o, T_n)
+    assert tb.pair_acceptance(H_o, H_n, T_o, T_n, T_o_src=T_o, T_n_src=T_n) == pytest.approx(plain)
+    acc, ess = tb.pair_acceptance(H_o, H_n, T_o, T_n, return_ess=True)
+    assert acc == pytest.approx(plain) and ess == 1.0
+    # samples drawn half a rung away, reweighted to the pair temperatures, land near the exact value;
+    # taken at face value they do not
+    H_o_off, H_n_off = gaussian_samples(T_o - 0.5, 3000, rng), gaussian_samples(T_n + 0.5, 3000, rng)
+    naive = tb.pair_acceptance(H_o_off, H_n_off, T_o, T_n)
+    acc, ess = tb.pair_acceptance(H_o_off, H_n_off, T_o, T_n, T_o_src=T_o - 0.5, T_n_src=T_n + 0.5,
+                                  return_ess=True)
+    assert abs(acc - exact) < 0.02 < abs(naive - exact)
+    assert 0 < ess < 1.0
+    # the subsampled path honours the weights too
+    sub = tb.pair_acceptance(H_o_off, H_n_off, T_o, T_n, T_o_src=T_o - 0.5, T_n_src=T_n + 0.5,
+                             max_pairs=50_000, rng=np.random.default_rng(1))
+    assert sub == pytest.approx(acc, abs=0.02)
 
 
 def test_stationary_window_detects_a_step():
@@ -160,6 +232,22 @@ def test_dry_walk_on_constant_cv_is_geometric():
     assert 55 <= T.size <= 60
     with pytest.raises(RuntimeError):
         tb.ladder_from_sigma(310.0, 367.0, lambda t: tb.sigma_from_cv(t, CV), 0.01, max_rungs=100, min_dT=1e-4)
+
+
+def test_dry_walk_down_is_geometric_and_ascending():
+    dL = tb.target_spacing(0.4)
+    sigma_fn = lambda t: tb.sigma_from_cv(t, CV)   # noqa: E731
+    down = tb.ladder_from_sigma(310.0, 367.0, sigma_fn, dL, direction='down')
+    up = tb.ladder_from_sigma(310.0, 367.0, sigma_fn, dL)
+    assert down[0] == 310.0 and down[-1] == 367.0 and np.all(np.diff(down) > 0)
+    # walked from the top: the geometric ratios hold from the top down, the even-out pairs sit at the bottom
+    ratios = down[3:] / down[2:-1]
+    eps = dL * tb.KB * 367.0 / tb.sigma_from_cv(367.0, CV)
+    assert ratios == pytest.approx(np.full(ratios.size, 1.0 / (1.0 + eps)) ** -1, rel=1e-9)
+    assert abs(down.size - up.size) <= 1
+    # on a constant heat capacity the two walks are mirror images: same pair lengths within the even-out
+    with pytest.raises(ValueError):
+        tb.ladder_from_sigma(310.0, 367.0, sigma_fn, dL, direction='sideways')
 
 
 def test_load_ladder_file_validates(tmp_path):

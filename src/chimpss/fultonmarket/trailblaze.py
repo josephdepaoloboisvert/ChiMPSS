@@ -58,7 +58,7 @@ __all__ = [
     'next_temperature', 'pair_acceptance', 'stationary_window', 'ladder_from_sigma',
     'load_ladder_file', 'Seed', 'Rung', 'TrailblazeRecord', 'SeedStore', 'Trailblazer',
     'OpenMMRungSampler', 'RECORD_NAME', 'LADDER_NAME', 'SEED_DIR', 'LADDER_MODES',
-    'SAMPLER_KEYS', 'WALK_KEYS', 'split_kwargs',
+    'DIRECTIONS', 'DIRECTION_SIGN', 'SAMPLER_KEYS', 'WALK_KEYS', 'split_kwargs',
 ]
 
 #: Boltzmann constant in kJ/(mol K); equals ``openmmtools.constants.kB``.
@@ -73,12 +73,17 @@ target_spacing = length_for_acceptance
 
 LADDER_MODES = ('geometric', 'trailblaze', 'file')
 
+#: Walk directions: ``'up'`` from ``T_min``, ``'down'`` from ``T_max``, ``'both'`` = an up walk,
+#: a down walk seeded from its hottest rung, and a reconciled ladder (:func:`reconcile`).
+DIRECTIONS = ('up', 'down', 'both')
+DIRECTION_SIGN = {'up': 1, 'down': -1}
+
 #: Keyword arguments of :class:`OpenMMRungSampler` and :class:`Trailblazer` that a
 #: caller may pass together as one ``trailblaze_kwargs`` dict.
 SAMPLER_KEYS = ('equil_ps', 'first_equil_ps', 'sample_ps', 'sample_interval_ps', 'max_sample_ps',
-                'neff_min', 'collision_rate_per_ps', 'pressure_bar')
+                'neff_min', 'collision_rate_per_ps', 'pressure_bar', 'ramp_K', 'ramp_ps')
 WALK_KEYS = ('target_acc', 'min_acc', 'max_acc', 'shrink', 'max_retries', 'max_rungs', 'max_dT',
-             'min_dT', 'sigma_window', 'sigma_source', 'force')
+             'min_dT', 'sigma_window', 'sigma_source', 'force', 'direction')
 
 
 def split_kwargs(kwargs: Optional[Dict[str, object]]) -> Tuple[Dict[str, object], Dict[str, object]]:
@@ -97,8 +102,16 @@ def beta(T):
 
 
 def pair_spacing(T_o: float, T_n: float, sigma_o: float, sigma_n: float) -> float:
-    """Thermodynamic length between two rungs from their enthalpy fluctuations (Shenfeld eq. 11)."""
-    return float(pair_lengths(np.array([T_o, T_n]), np.array([sigma_o, sigma_n]))[0])
+    """Thermodynamic length between two rungs from their enthalpy fluctuations.
+
+    ``0.5 (sigma_o + sigma_n) |beta_o - beta_n|``: the mean of the two rungs'
+    metric estimates times the inverse-temperature gap (Shenfeld's two-sided
+    eq. 11 uses the root mean square of the two; the difference is second
+    order in ``sigma_n - sigma_o``).  Unsigned, so a downward pair measures
+    the same as the upward one; ``chimpss.analysis.ladder.pair_lengths``
+    keeps the sign for ascending ladders.
+    """
+    return abs(float(pair_lengths(np.array([T_o, T_n]), np.array([sigma_o, sigma_n]))[0]))
 
 
 def sigma_from_cv(T, cv):
@@ -110,51 +123,79 @@ def sigma_from_cv(T, cv):
 # Stepping
 # ---------------------------------------------------------------------------
 
-def next_temperature(T_o: float, sigma_o: float, dL: float, T_max: float, step_scale: float = 1.0,
-                     max_dT: float = 10.0, min_dT: float = 0.1,
-                     even_out_fraction: float = 0.5) -> Tuple[float, bool]:
-    """The next rung a thermodynamic length ``dL * step_scale`` above ``T_o``.
+def next_temperature(T_o: float, sigma_o: float, dL: float, T_end: Optional[float] = None,
+                     step_scale: float = 1.0, max_dT: float = 10.0, min_dT: float = 0.1,
+                     even_out_fraction: float = 0.5, direction: int = 1,
+                     T_max: Optional[float] = None) -> Tuple[float, bool]:
+    """The next rung a thermodynamic length ``dL * step_scale`` from ``T_o`` towards ``T_end``.
 
-    Exact in ``beta``: ``beta_n = beta_o - dL step_scale / sigma_o``.  The
-    step is capped at ``max_dT`` (a huge ``sigma`` estimate from a transient
-    must not launch the walk) and refused below ``min_dT`` (a tiny step means
-    ``sigma`` is not a stationary fluctuation, or the ladder would collide at
-    the two decimals the analysis layer uses).
+    Exact in ``beta``: ``beta_n = beta_o - direction dL step_scale / sigma_o``,
+    i.e. ``T_n = T_o / (1 - direction dL step_scale k_B T_o / sigma_o)`` with
+    ``direction = +1`` walking up in temperature and ``-1`` walking down.  The
+    step is capped at ``max_dT`` kelvin (a huge ``sigma`` estimate from a
+    transient must not launch the walk) and refused below ``min_dT`` (a tiny
+    step means ``sigma`` is not a stationary fluctuation, or the ladder would
+    collide at the two decimals the analysis layer uses).
 
-    Endpoint handling: when the step reaches ``T_max`` the rung is placed
+    Endpoint handling: when the step reaches ``T_end`` the rung is placed
     there and ``crossed`` is True.  When it would leave a sliver shorter than
     ``even_out_fraction`` of a step, the remaining distance is split in two
     equal rungs instead, so the last pair is never longer than a step and
-    never a stub.
+    never a stub.  ``T_max`` is accepted as a deprecated alias of ``T_end``.
     """
+    if T_end is None:
+        if T_max is None:
+            raise TypeError('next_temperature() needs T_end')
+        T_end = T_max
     if not np.isfinite(sigma_o) or sigma_o <= 0:
         raise ValueError(f'sigma_H must be finite and positive, got {sigma_o}')
     if dL <= 0 or step_scale <= 0:
         raise ValueError('dL and step_scale must be positive')
-    if T_o >= T_max:
-        raise ValueError(f'T_o={T_o} is not below T_max={T_max}')
-    denom = 1.0 - dL * step_scale * KB * T_o / sigma_o
-    T_n = T_o + max_dT if denom <= 0 else T_o / denom
-    dT = min(T_n - T_o, max_dT)
+    d = 1 if direction >= 0 else -1
+    if d * (T_end - T_o) <= 0:
+        raise ValueError(f'T_o={T_o} is not {"below" if d > 0 else "above"} T_end={T_end}')
+    x = dL * step_scale * KB * T_o / sigma_o
+    denom = 1.0 - d * x
+    T_n = T_o + d * max_dT if denom <= 0 else T_o / denom
+    dT = min(abs(T_n - T_o), max_dT)
     if dT < min_dT:
         raise ValueError(f'step {dT:.4f} K below min_dT={min_dT} K: sigma_H={sigma_o:.1f} at {T_o:.2f} K '
                          f'is too large for dL={dL * step_scale:.3f}; the sample is not stationary')
-    T_n = T_o + dT
-    if T_n >= T_max:
-        return float(T_max), True
-    if (T_max - T_n) < even_out_fraction * dT:
-        return float(T_o + 0.5 * (T_max - T_o)), False
+    T_n = T_o + d * dT
+    if d * (T_n - T_end) >= 0:
+        return float(T_end), True
+    if d * (T_end - T_n) < even_out_fraction * dT:
+        return float(T_o + 0.5 * (T_end - T_o)), False
     return float(T_n), False
 
 
+def _reweight(H: np.ndarray, T_target: float, T_src: Optional[float]) -> np.ndarray:
+    """Normalised importance weights taking samples drawn at ``T_src`` to ``T_target``."""
+    if T_src is None or float(T_src) == float(T_target):
+        return np.full(H.size, 1.0 / H.size)
+    logw = -(float(beta(T_target)) - float(beta(T_src))) * (H - H.mean())
+    w = np.exp(logw - logw.max())
+    return w / w.sum()
+
+
 def pair_acceptance(H_o: np.ndarray, H_n: np.ndarray, T_o: float, T_n: float,
-                    max_pairs: int = 250_000, rng: Optional[np.random.Generator] = None) -> float:
+                    max_pairs: int = 250_000, rng: Optional[np.random.Generator] = None,
+                    T_o_src: Optional[float] = None, T_n_src: Optional[float] = None,
+                    return_ess: bool = False):
     """Exact Metropolis exchange acceptance between two rungs from their samples.
 
     Every configuration sampled at ``T_o`` is paired with every configuration
     sampled at ``T_n``: ``mean(min(1, exp(-(beta_o - beta_n) (H_n[j] - H_o[i]))))``,
     which is AlGDock's ``exp(-u01 - u10 + u00 + u11)`` over the full outer
     product.  Above ``max_pairs`` the pairs are subsampled at random.
+
+    ``T_o_src`` / ``T_n_src`` say that a sample set was drawn at another
+    temperature than the rung it stands for (a walked rung near a reconciled
+    one): that set is then importance-reweighted, ``w ~ exp(-(beta_target -
+    beta_src) H)``, the same exponential reweighting
+    :func:`chimpss.analysis.ladder.virtual_pair_acceptance` applies to saved
+    blocks.  ``return_ess=True`` also returns the smaller of the two sets'
+    effective-sample fractions, 1 when nothing was reweighted.
     """
     H_o = np.asarray(H_o, dtype=np.float64)
     H_n = np.asarray(H_n, dtype=np.float64)
@@ -163,15 +204,21 @@ def pair_acceptance(H_o: np.ndarray, H_n: np.ndarray, T_o: float, T_n: float,
     if H_o.size == 0 or H_n.size == 0:
         raise ValueError('both sample sets must contain finite values')
     db = float(beta(T_o) - beta(T_n))
+    w_o = _reweight(H_o, T_o, T_o_src)
+    w_n = _reweight(H_n, T_n, T_n_src)
+    ess = min(1.0 / (H_o.size * np.sum(w_o ** 2)), 1.0 / (H_n.size * np.sum(w_n ** 2)))
     total = H_o.size * H_n.size
     if total <= max_pairs:
         delta = db * (H_n[None, :] - H_o[:, None])
+        acc = float(np.sum(w_o[:, None] * w_n[None, :] * np.minimum(1.0, np.exp(-delta))))
     else:
         rng = np.random.default_rng(0) if rng is None else rng
-        i = rng.integers(0, H_o.size, size=max_pairs)
-        j = rng.integers(0, H_n.size, size=max_pairs)
+        i = rng.choice(H_o.size, size=max_pairs, p=w_o)
+        j = rng.choice(H_n.size, size=max_pairs, p=w_n)
         delta = db * (H_n[j] - H_o[i])
-    return float(np.minimum(1.0, np.exp(-delta)).mean())
+        acc = float(np.minimum(1.0, np.exp(-delta)).mean())
+    acc = min(1.0, acc)                      # weights sum to one only to rounding
+    return (acc, float(ess)) if return_ess else acc
 
 
 def stationary_window(H: np.ndarray, min_keep: int = 20) -> Tuple[int, float, float]:
@@ -204,16 +251,24 @@ def stationary_window(H: np.ndarray, min_keep: int = 20) -> Tuple[int, float, fl
 
 
 def ladder_from_sigma(T_min: float, T_max: float, sigma_fn: Callable[[float], float], dL: float,
-                      max_rungs: int = 10_000, **step_kwargs) -> np.ndarray:
-    """Deterministic walk on a known ``sigma_H(T)``: the ladder trailblazing converges to."""
-    T = [float(T_min)]
+                      max_rungs: int = 10_000, direction: str = 'up', **step_kwargs) -> np.ndarray:
+    """Deterministic walk on a known ``sigma_H(T)``: the ladder trailblazing converges to.
+
+    ``direction='down'`` starts at ``T_max`` and steps down; the result is
+    returned ascending either way.
+    """
+    if direction not in DIRECTION_SIGN:
+        raise ValueError(f"direction must be 'up' or 'down', got {direction!r}")
+    sign = DIRECTION_SIGN[direction]
+    T_start, T_end = (float(T_min), float(T_max)) if sign > 0 else (float(T_max), float(T_min))
+    T = [T_start]
     crossed = False
     while not crossed:
         if len(T) >= max_rungs:
             raise RuntimeError(f'more than {max_rungs} rungs; dL={dL} is too small for this sigma')
-        T_n, crossed = next_temperature(T[-1], float(sigma_fn(T[-1])), dL, T_max, **step_kwargs)
+        T_n, crossed = next_temperature(T[-1], float(sigma_fn(T[-1])), dL, T_end, direction=sign, **step_kwargs)
         T.append(T_n)
-    return np.asarray(T)
+    return np.asarray(T if sign > 0 else T[::-1])
 
 
 def load_ladder_file(path: str) -> np.ndarray:
