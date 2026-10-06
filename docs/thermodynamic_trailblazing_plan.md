@@ -402,3 +402,14 @@ per-block pooled acceptance over the trailing blocks on the same ladder (≥ 3) 
 more than two standard errors gets a rung before the next block, seeded from the rung below, so
 nothing is discarded. rep4 was restarted from block 1 (60 rungs) under this rule with a 225 ns cap
 (ten blocks).
+
+**2026-10-06, ten-block continuation complete.** Under the trailing rule rep4 ran blocks 2–9 with
+no insertion (ladder 60 rungs throughout), 2.4 h per block, 305 ns aggregate and 5.1 ns per
+replica in total. Block means 0.402–0.410; pooled over blocks 1–9 (261 samples per rung) every
+pair exchanges at 0.335–0.661, mean 0.409, no pair below 0.30, ΔL CV 0.13, prediction-versus-
+measurement correlation 0.96, and the production metric puts the 0.40-target ladder at 61 rungs
+against the 60 in use. Restart signature at iteration 0 within ±0.16 σ on every block. Cumulative
+mixing time on walker-continuous trajectories ≈ 700 iterations, so no walker completed a half-leg
+in 270 iterations; round trips need tens of blocks on a 60-rung ladder, as on any ladder of this
+size. Comparison: rep3's first blocks on 120 rungs exchanged at 0.68 with 0.28 ns per replica per
+block, i.e. half the per-replica sampling at twice the rungs.
