@@ -43,7 +43,7 @@ Notation: β = 1/(k_B T), H = U + pV (the sampler's reduced potential is u = β�
 |---|---|---|
 | Fisher metric on β | g(β) = Var_β(H) = σ_H² | Shenfeld eq. 3 |
 | Metric on ln β | g(ln β) = C_V / k_B → constant C_V ⇒ geometric ladder | Shenfeld §IV, Fig. 1 |
-| Length of a pair | ΔL ≈ σ_H · (β_k − β_{k+1}), σ_H = mean of the two rungs' σ | Shenfeld eq. 11 |
+| Length of a pair | ΔL ≈ σ_H · (β_k − β_{k+1}), σ_H = mean of the two rungs' σ (Shenfeld's two-sided eq. 11 is the root mean square of the two; the difference is second order in σ_n − σ_o) | Shenfeld eqs. 9–11 |
 | Cumulative length | L(T) = ∫ σ_H(T') dT' / (k_B T'²) | from eq. 2 |
 | Optimality | equidistant ΔL maximises total acceptance; −ΔL²/2 − ΔL/√2 ≤ ln A ≤ −ΔL²/2 | Shenfeld Thm 2, eq. 20 |
 | Gaussian acceptance | A = erfc(ΔL/2) ⇒ ΔL* = 2·erfcinv(A*) (A*=0.5→0.95, 0.4→1.19, 0.35→1.32) | standard, inside eq. 20 bounds |
@@ -157,7 +157,7 @@ Pure helpers (numpy + `scipy.special.erfc/erfcinv` only):
 |---|---|
 | `KB_KJ_PER_MOL_K = 0.008314462618`, `beta(T)` | matches `openmmtools.constants.kB` |
 | `target_spacing(A*)` / `predicted_acceptance(ΔL)` | `2·erfcinv(A*)` / `erfc(ΔL/2)` |
-| `pair_spacing(T_o, T_n, σ_o, σ_n)` | `(β_o − β_n)·(σ_o+σ_n)/2` (Shenfeld eq. 11) |
+| `pair_spacing(T_o, T_n, σ_o, σ_n)` | `|β_o − β_n|·(σ_o+σ_n)/2` (mean of the two σ; Shenfeld's eq. 11 averages the variances, equal to second order) |
 | `next_temperature(T_o, σ_o, ΔL, T_max, step_scale, max_dT=10, min_dT=0.1)` | exact-in-β step `T_n = T_o/(1 − ΔL·step_scale·k_B T_o/σ_o)`; cap at `max_dT`; raise below `min_dT`; clamp to `T_max` and set `crossed`; snap to `T_max` if the remaining sliver is < half a step |
 | `pair_acceptance(H_o, H_n, T_o, T_n)` | exact Metropolis mean over all (i, j) sample pairs `min(1, exp(−(β_o−β_n)(H_n[j]−H_o[i])))` (AlGDock's `exp(−u01−u10+u00+u11)`), subsampled above 250k pairs |
 | `stationary_window(H)` | `(t0, g, Neff)` via `pymbar.timeseries.detect_equilibration` when importable, else a two-halves drift test |
@@ -349,6 +349,58 @@ Compare per-replica ns per block against an existing run (25 ns / 58 ≈ 0.43 ns
 - **Reference-paper mismatch**: neither PDF names "trailblazing"; the plan cites Shenfeld for the
   metric/equidistance/acceptance bounds, Nguyen & Minh for the ≥ 35 % sufficiency result, and
   AlGDock's `initialization.py` for the sequential procedure.
+
+## Bidirectional walks (2026-10-06)
+
+**Question.** Is a high-to-low walk as valid as the low-to-high one, and does walking both
+ways improve the ladder?
+
+**What the references say.** Shenfeld 2009 defines the thermodynamic length as a Riemannian
+distance along a geodesic (eq. 2) and places intermediates equidistantly on it; the proof of its
+Theorem 2 uses `L(λa,λb) = L(λb,λa)`. Neither Shenfeld nor Nguyen & Minh 2016 describes a
+sequential construction (Shenfeld proposes a lattice of short simulations, a geodesic through
+the metric estimates, then equidistant points), so neither prescribes a direction. AlGDock's
+BC process warms from T_TARGET to T_HIGH and reverses the stored protocol
+(`bc_process/bc_calculator.py:40-43`, `initialization.py:786`); its unused `warm=False`
+branch is the only cooling walk in the template.
+
+**What the data say** (rep4 production metric, blocks 1–9, `cv_linear` fit, ΔL* = 1.19):
+
+| placement | rungs | realised ΔL mean (min, max) | predicted A mean / min | max offset from integral rung |
+|---|---|---|---|---|
+| sequential up (310→367 K) | 61 | 1.178 (0.77, 1.19) | 0.406 / 0.400 | 0.50 K |
+| sequential down (367→310 K) | 61 | 1.178 (0.84, 1.19) | 0.405 / 0.400 | 0.44 K |
+| integral (equal arc length) | 61 | 1.178 (1.178, 1.178) | 0.405 / 0.405 | — |
+
+Realised/target ΔL per step 1.0010 (up) vs 0.9990 (down): forward and backward Euler on
+`dβ/ds = 1/σ(β)` differ by O(ΔL²·d ln σ/dβ) ≈ 0.1 % per step because σ_H changes only 12 %
+over 57 K. A 7 % underestimate of σ (the walk's 100 ps samples vs the production metric)
+costs 4 rungs and 0.03 in acceptance identically in both directions. Enthalpy one iteration
+after 2–4 rung exchange jumps in production shows no lag either way (heating −0.03 ± 0.05 σ,
+cooling +0.03 ± 0.06 σ). Per-rung σ noise (neff 33–102 ⇒ ±7–12 %) dominates and is
+direction-independent.
+
+**Conclusion.** A down walk reproduces the up walk within σ noise. Walking both ways does not
+change the optimum; it (1) measures the sampling noise directly as the hysteresis between the
+two ladders, the two fitted metrics σ_up(T)/σ_down(T) and the two mean-enthalpy profiles;
+(2) halves the variance of the fitted metric, so the reconciled ladder is placed by the
+direction-free integral rule (`analysis.ladder.respace`) to ~1 % uniformity instead of a
+walk's ~5 %; (3) seeds every rung from the down walk, i.e. from configurations annealed
+from an equilibrated hot one.
+
+**Implementation.** `next_temperature(..., direction=±1)` is exact in β either way;
+`Trailblazer(direction='down')` starts at `T_max`, heats a cold seed there in `ramp_K` stages
+(`OpenMMRungSampler.prepare(T, seed, T_from=...)`), keeps its walk-order seeds under
+`seeds/walk_XXX.npz` and finalises ascending (`seeds/rung_XXX.npz` linked, rejections
+remapped). `run_trailblaze(direction='both')` runs `trailblaze/up`, then `trailblaze/down`
+seeded from the up walk's hottest rung, then `reconcile()` writes the consensus record
+(`direction='both'`), `temperatures.npy`, `seeds/` from the down walk with velocities rescaled,
+and `reconcile.json` (K per ladder, pair lengths on the merged metric, hysteresis, fit quality,
+seed sources, reweighted pair acceptances). CLI: `--tb_direction up|down|both`
+(`chimpss-trailblaze walk --direction`), `chimpss-trailblaze reconcile`; campaign:
+`PTRE_TB_DIRECTION` (default `up`). Resume compares inputs through legacy defaults, so rep4's
+record still resumes. Validation on NTSR1: a down walk with rep4's inputs
+(`runs/NTSR1_ML-301.hmr.tbdown`), reconciled against rep4's up walk; results below when done.
 
 ## Status (2026-10-04, end of day)
 

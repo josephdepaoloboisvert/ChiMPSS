@@ -88,6 +88,26 @@ made unreproducible a production run.
   net rather than firing on every pair below the old 0.5. Default target
   acceptance 0.40; expected ~62-67 rungs on the campaign systems against
   110-132 today. Plan: `docs/thermodynamic_trailblazing_plan.md`.
+- **Bidirectional trailblazing** (`--tb_direction up|down|both`,
+  `chimpss-trailblaze walk --direction`, `chimpss-trailblaze reconcile`).
+  The walk can start at `T_max` and step down (the burn-in configuration is
+  heated there in `--tb_ramp_K` stages first); its record, `temperatures.npy`
+  and `seeds/rung_XXX.npz` come out ascending like an up walk's. `both` runs
+  the up walk, then the down walk seeded from its hottest rung, and
+  reconciles them: the two per-rung `sigma_H` profiles are pooled into one
+  linear `C_V(T)` fit and the rungs are placed by integrating that metric
+  (`analysis.ladder.respace`), the direction-free placement each walk
+  approximates one step at a time; every rung is seeded from the nearest
+  down-walk rung (configurations annealed from an equilibrated hot one, velocities
+  rescaled) and `trailblaze/reconcile.json` reports the hysteresis between the
+  two walks' fitted metrics and mean enthalpies. Thermodynamic length is a
+  Riemannian distance, so direction is not where the error is: on rep4's
+  production metric the forward and backward placements both give 61 rungs
+  with pair lengths within 0.1 % of target, every rung within 0.5 K of the
+  integral placement; walking both ways halves the fitted-metric variance and
+  measures the sampling noise directly. `pair_acceptance` can reweight a
+  sample set from the temperature it was drawn at; resume compares inputs
+  through legacy defaults, so older records still resume.
 - **`chimpss.analysis.ladder` and `chimpss-ladder-audit`** — the temperature
   ladder, audited from the three small arrays every block already saves.
   Recovers the per-rung enthalpy fluctuation (the thermodynamic-length metric,
