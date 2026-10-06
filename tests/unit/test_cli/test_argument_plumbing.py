@@ -402,3 +402,39 @@ def test_trailblaze_cli_walk_and_from_run_parse():
     args = trailblaze.parse_args(['from-run', 'runs/x', '--out', 'ladders/x', '--blocks', '120:161'])
     assert args.mode == 'from-run' and args.out == 'ladders/x' and args.blocks == ['120:161']
     assert args.skip == 1 and not args.no_virtual
+
+
+def test_trailblaze_direction_and_ramp_flags_are_plumbed(monkeypatch):
+    from chimpss.cli import fultonmarket, trailblaze, trailblaze_args
+    from chimpss.fultonmarket.trailblaze import DIRECTIONS, split_kwargs
+    assert tuple(trailblaze_args.DIRECTIONS) == DIRECTIONS
+    monkeypatch.setattr('sys.argv', _FM_POSITIONAL + ['--ladder', 'trailblaze', '--tb_direction', 'both',
+                                                      '--tb_ramp_K', '5', '--tb_ramp_ps', '30'])
+    s = fultonmarket.trailblaze_settings(fultonmarket.parse_args())
+    assert s['direction'] == 'both' and s['ramp_K'] == 5.0 and s['ramp_ps'] == 30.0
+    sampler_kwargs, walk_kwargs = split_kwargs(s)
+    assert walk_kwargs['direction'] == 'both' and sampler_kwargs['ramp_K'] == 5.0
+    assert set(sampler_kwargs) | set(walk_kwargs) == set(s)
+    # the default direction is up, and the walk command accepts the short alias
+    monkeypatch.setattr('sys.argv', _FM_POSITIONAL + ['--ladder', 'trailblaze'])
+    assert fultonmarket.trailblaze_settings(fultonmarket.parse_args())['direction'] == 'up'
+    args = trailblaze.parse_args(['walk', 'in.pdb', 'sys.xml', 'out/', '--input_state', 's.xml', '--direction', 'down'])
+    assert args.tb_direction == 'down' and trailblaze.walk_settings(args)['direction'] == 'down'
+    assert trailblaze.walk_settings(args)['ramp_ps'] is None
+    with pytest.raises(SystemExit):
+        trailblaze.parse_args(['walk', 'in.pdb', 'sys.xml', 'out/', '--input_state', 's.xml', '--direction', 'sideways'])
+    # the two entry points build the same dict from the same flags
+    monkeypatch.setattr('sys.argv', _FM_POSITIONAL + ['--ladder', 'trailblaze', '--tb_direction', 'down',
+                                                      '--tb_sample_ps', '50'])
+    fm = fultonmarket.trailblaze_settings(fultonmarket.parse_args())
+    tb = trailblaze.walk_settings(trailblaze.parse_args(['walk', 'in.pdb', 'sys.xml', 'out/', '--input_state', 's.xml',
+                                                         '--tb_direction', 'down', '--tb_sample_ps', '50']))
+    assert fm == tb
+
+
+def test_trailblaze_cli_reconcile_parses():
+    from chimpss.cli import trailblaze
+    args = trailblaze.parse_args(['reconcile', 'runs/x/trailblaze'])
+    assert args.mode == 'reconcile' and args.up_dir is None and args.down_dir is None and args.target_acc is None
+    args = trailblaze.parse_args(['reconcile', 'runs/x/trailblaze', '--up_dir', 'runs/y/trailblaze', '--target_acc', '0.45'])
+    assert args.up_dir == 'runs/y/trailblaze' and args.target_acc == 0.45

@@ -56,39 +56,9 @@ def parse_args():
     p.add_argument('--insertion_min_blocks', default=3, type=int,
                    help="Blocks the 'trailing' rule needs on the current ladder before it may insert. Default 3.")
 
-    # Trailblazing
-    t = p.add_argument_group('trailblazing (--ladder trailblaze)')
-    t.add_argument('--target_acc', default=0.40, type=float,
-                   help='Neighbour acceptance the walk aims for; sets the spacing '
-                        'dL* = 2 erfcinv(A). Default 0.40 (dL* 1.19).')
-    t.add_argument('--min_acc', default=0.30, type=float,
-                   help='Measured acceptance below which a proposed rung is rejected and the '
-                        'step shrunk. Default 0.30.')
-    t.add_argument('--max_acc', default=0.75, type=float,
-                   help='Acceptance above which a proposed rung is rejected and the step '
-                        'stretched. Default 0.75.')
-    t.add_argument('--tb_first_equil_ps', default=200.0, type=float,
-                   help='Equilibration of the starting configuration at T_min. Default 200.')
-    t.add_argument('--tb_equil_ps', default=20.0, type=float,
-                   help='Equilibration at each new rung. Default 20.')
-    t.add_argument('--tb_sample_ps', default=100.0, type=float,
-                   help='Enthalpy sampling per rung, extended until --tb_neff_min effective '
-                        'samples or --tb_max_sample_ps. Default 100.')
-    t.add_argument('--tb_sample_interval_ps', default=1.0, type=float,
-                   help='Spacing of enthalpy samples. Default 1.')
-    t.add_argument('--tb_max_sample_ps', default=400.0, type=float, help='Default 400.')
-    t.add_argument('--tb_neff_min', default=50, type=int, help='Default 50.')
-    t.add_argument('--tb_max_rungs', default=400, type=int,
-                   help='Abort if the walk has not reached T_max after this many rungs. Default 400.')
-    t.add_argument('--tb_sigma_window', default=5, type=int,
-                   help='Rungs over which sigma_H is pooled for the step (1 = each rung alone). Default 5.')
-    t.add_argument('--tb_sigma_source', default='pooled', choices=['pooled', 'slope'],
-                   help="What the step uses: 'pooled' (default) the pooled enthalpy fluctuation; "
-                        "'slope' the fluctuation-dissipation value from the enthalpy slope d<H>/dT "
-                        "over the trailing rungs, which tracks the production metric more closely "
-                        "when single-trajectory windows miss slow fluctuations.")
-    t.add_argument('--tb_force', action='store_true',
-                   help='Resume a trailblaze record written with different settings.')
+    # Trailblazing: the flags are defined once, in chimpss.cli.trailblaze_args, for both entry points
+    from chimpss.cli.trailblaze_args import add_trailblaze_arguments
+    add_trailblaze_arguments(p.add_argument_group('trailblazing (--ladder trailblaze)'))
 
     # Simulation timing
     p.add_argument('--iter_length', default=0.001, type=float,
@@ -233,14 +203,10 @@ def parse_args():
 
 def trailblaze_settings(args):
     """The trailblaze_kwargs dict implied by the parsed flags, or None unless --ladder trailblaze."""
+    from chimpss.cli.trailblaze_args import trailblaze_settings as _shared
     if args.ladder != 'trailblaze':
         return None
-    return dict(target_acc=args.target_acc, min_acc=args.min_acc, max_acc=args.max_acc,
-                first_equil_ps=args.tb_first_equil_ps, equil_ps=args.tb_equil_ps,
-                sample_ps=args.tb_sample_ps, sample_interval_ps=args.tb_sample_interval_ps,
-                max_sample_ps=args.tb_max_sample_ps, neff_min=args.tb_neff_min,
-                max_rungs=args.tb_max_rungs, sigma_window=args.tb_sigma_window, sigma_source=args.tb_sigma_source,
-                force=args.tb_force)
+    return _shared(args)
 
 
 def panel_settings(args):
