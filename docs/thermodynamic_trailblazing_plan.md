@@ -400,7 +400,21 @@ seed sources, reweighted pair acceptances). CLI: `--tb_direction up|down|both`
 (`chimpss-trailblaze walk --direction`), `chimpss-trailblaze reconcile`; campaign:
 `PTRE_TB_DIRECTION` (default `up`). Resume compares inputs through legacy defaults, so rep4's
 record still resumes. Validation on NTSR1: a down walk with rep4's inputs
-(`runs/NTSR1_ML-301.hmr.tbdown`), reconciled against rep4's up walk; results below when done.
+(`runs/NTSR1_ML-301.hmr.tbdown`), reconciled against rep4's up walk.
+
+**Validation result (2026-10-06, report doc ee03d7a1-e64a-4fc0-8000-e55f57a4bf82).** The down
+walk gave 59 rungs in 61 min (+ 86 s heating 310→367 K in six 10 K stages), 7 rejections
+against the up walk's 14, measured pair acceptance 0.301/0.387/0.672 (min/median/max) against
+0.307/0.390/0.537. Hysteresis: fitted metrics −1.1 % mean (1.4 % max) where single rungs
+scatter 8.7 %; mean enthalpy −0.08 σ mean (0.94 σ max); L_total 66.52 vs 65.80. Both walks
+measure σ_H at 0.934 and 0.940 of the production metric (rep4 blocks 1–9). On that metric the
+up walk has pair-length CV 0.094 and reweighted acceptance 0.335–0.532, the down walk CV 0.086
+and 0.312–0.679, the reconciled 57-rung ladder CV 0.001 and 0.332–0.434 (mean 0.379): uniform,
+but 4 rungs short of the 61 production asks for because the merged walk metric is 6 % low.
+Recommendation: reconcile with `--tb_sigma_source slope` or `reconcile --target_acc 0.43`
+(gives 61 rungs); keep `PTRE_TB_DIRECTION=up` until a production block on a down-seeded
+ladder has been compared with rep4's block 0. Consensus files:
+`runs/NTSR1_ML-301.hmr.tbdown/consensus/`.
 
 ## Status (2026-10-04, end of day)
 
