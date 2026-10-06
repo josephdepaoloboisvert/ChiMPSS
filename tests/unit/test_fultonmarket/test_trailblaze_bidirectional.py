@@ -230,3 +230,109 @@ def test_seed_store_link_and_velocity_scaling(tmp_path):
     assert not os.path.samefile(dst.path(1), src.path(4))
     dst.link(1, src.path(4), velocity_scale=0.5)                # re-runnable
     assert not any('.tmp.' in f for f in os.listdir(dst.dir))
+
+
+# ---------------------------------------------------------------------------
+# both directions and the reconciled ladder
+# ---------------------------------------------------------------------------
+
+def true_dl_cv(T):
+    """Spread of the pair lengths of a ladder on the fake sampler's exact metric."""
+    from chimpss.analysis.ladder import pair_lengths
+    dl = pair_lengths(T, tb.sigma_from_cv(T, CV))
+    return float(np.std(dl) / np.mean(dl))
+
+
+def test_both_runs_up_then_down_from_the_hot_rung_and_reconciles(tmp_path):
+    sampler = PreparingSampler(seed=40, n=40)                  # ~11 % noise on every rung's sigma
+    out = tmp_path / 'trailblaze'
+    rec = tb.run_trailblaze(sampler, 310.0, 367.0, make_seed(), out_dir=str(out), direction='both',
+                            printf=quiet, target_acc=0.4, min_acc=0.05, max_acc=0.95)
+    up = tb.TrailblazeRecord.load_if_complete(str(out / tb.UP_DIR / tb.RECORD_NAME))
+    down = tb.TrailblazeRecord.load_if_complete(str(out / tb.DOWN_DIR / tb.RECORD_NAME))
+    assert up is not None and down is not None and up.direction == 'up' and down.direction == 'down'
+    K_up, K_down = len(up.rungs), len(down.rungs)
+    # the up walk ran first from the burn-in seed; the down walk started at T_max from the up walk's
+    # hottest rung, prepared without a heating ramp
+    assert sampler.calls[0] == 310.0 and sampler.calls[K_up - 1] == 367.0
+    assert sampler.calls[K_up] == 367.0 and sampler.calls[-1] == 310.0
+    assert sampler.prepare_calls == [(310.0, None), (367.0, None)]
+    assert down.prepare['T_from'] == 367.0 and down.prepare['stages'] == []
+
+    # the consensus: ascending, complete, direction 'both', placed by the integral rule
+    assert rec.complete and rec.direction == 'both' and rec.consensus['K_up'] == K_up
+    T = rec.temperatures
+    assert T[0] == 310.0 and T[-1] == 367.0 and np.all(np.diff(T) > 0)
+    assert abs(T.size - K_up) <= 4 and abs(T.size - K_down) <= 4
+    assert np.array_equal(np.load(out / tb.LADDER_NAME), T)
+    assert tb.TrailblazeRecord.load_if_complete(str(out / tb.RECORD_NAME)).meta['min_acc'] == 0.05
+    assert rec.meta['direction'] == 'both' and rec.meta['K_down'] == K_down
+    # on the exact metric the reconciled ladder is more uniform than either walk
+    assert true_dl_cv(T[1:-1]) < min(true_dl_cv(up.temperatures[1:-2]), true_dl_cv(down.temperatures[2:-1]))
+    assert true_dl_cv(T) < 0.03
+
+    # seeds: every rung from the nearest down rung, re-indexed ascending, within half a rung
+    store = tb.SeedStore(str(out))
+    assert store.has_all(T.size)
+    for k, r in enumerate(rec.rungs):
+        assert r.source == 'down' and r.source_T == down.rungs[r.source_index].T
+        seed, H = store.load(k)
+        assert seed.positions[0, 0] == pytest.approx(r.source_T)   # the fake seed is tagged with its T
+        assert abs(r.source_T - r.T) <= 0.6 * np.diff(T).max()
+        assert r.sigma_fit is not None and r.seed_path == store.path(k)
+    assert rec.rungs[0].acc_est is None
+    accs = rec.pair_acc()
+    assert accs.shape == (T.size - 1,) and np.all(np.isfinite(accs))
+    assert np.all((accs > 0.2) & (accs < 0.7)) and abs(np.median(accs) - 0.4) < 0.08
+
+    # the diagnostics file
+    with open(out / tb.RECONCILE_NAME) as fh:
+        d = json.load(fh)
+    assert d['K_up'] == K_up and d['K_down'] == K_down and d['K_consensus'] == T.size
+    h = d['hysteresis']
+    assert abs(h['sigma_fit_rel_mean']) < 0.05 and h['sigma_fit_rel_max'] < 0.1
+    assert h['mean_H_over_sigma_max'] < 1.0        # 40 samples per rung: ~0.2 sigma noise per point, max over 200
+    assert d['ladders']['consensus']['dL_cv'] < d['ladders']['up']['dL_cv']
+    assert d['ladders']['up']['n_rejected'] == len(up.rejected)
+    assert d['fit']['model'] == 'cv_linear'
+    assert len(d['seed_sources']) == T.size and d['acc_ess_fraction_min'] > 0.2
+
+    # a second call returns the consensus without touching the sampler
+    untouched = PreparingSampler(seed=41, n=40)
+    again = tb.run_trailblaze(untouched, 310.0, 367.0, make_seed(), out_dir=str(out), direction='both',
+                              printf=quiet, target_acc=0.4, min_acc=0.05, max_acc=0.95)
+    assert again.temperatures.tolist() == T.tolist() and untouched.calls == [] and untouched.prepare_calls == []
+
+
+def test_run_trailblaze_single_directions_and_validation(tmp_path):
+    sampler = FakeSampler(seed=42, n=200)
+    rec = tb.run_trailblaze(sampler, 310.0, 313.0, make_seed(), out_dir=str(tmp_path / 'd'), direction='down',
+                            printf=quiet)
+    assert rec.complete and rec.direction == 'down'
+    rec = tb.run_trailblaze(sampler, 310.0, 313.0, make_seed(), printf=quiet, direction='up')
+    assert rec.complete and rec.direction == 'up'
+    # the direction may also travel inside the walk kwargs, as split_kwargs delivers it
+    rec = tb.run_trailblaze(sampler, 310.0, 313.0, make_seed(), printf=quiet, **{'direction': 'up'})
+    assert rec.direction == 'up'
+    with pytest.raises(ValueError, match='out_dir'):
+        tb.run_trailblaze(sampler, 310.0, 313.0, make_seed(), direction='both', printf=quiet)
+    with pytest.raises(ValueError, match='direction'):
+        tb.run_trailblaze(sampler, 310.0, 313.0, make_seed(), direction='sideways', printf=quiet)
+    # a cached single-direction ladder in out_dir is returned for a 'both' request, with a note
+    messages = []
+    cached = tb.run_trailblaze(FakeSampler(seed=43, n=200), 310.0, 313.0, make_seed(), out_dir=str(tmp_path / 'd'),
+                               direction='both', printf=messages.append)
+    assert cached.direction == 'down' and any('NOTE' in m for m in messages)
+
+
+def test_reconcile_refuses_mismatched_walks(tmp_path):
+    up = tb.Trailblazer(FakeSampler(seed=44, n=100), 310.0, 315.0, target_acc=0.4, out_dir=str(tmp_path / 'u'),
+                        printf=quiet).run(make_seed())
+    down = tb.Trailblazer(FakeSampler(seed=45, n=100), 310.0, 315.0, target_acc=0.5, direction='down',
+                          out_dir=str(tmp_path / 'd'), printf=quiet).run(make_seed())
+    with pytest.raises(ValueError, match='target_acc'):
+        tb.reconcile(up, down, str(tmp_path / 'c'), up_dir=str(tmp_path / 'u'), down_dir=str(tmp_path / 'd'),
+                     printf=quiet)
+    incomplete = tb.TrailblazeRecord(inputs=dict(up.inputs))
+    with pytest.raises(ValueError, match='not complete'):
+        tb.reconcile(up, incomplete, str(tmp_path / 'c'), printf=quiet)

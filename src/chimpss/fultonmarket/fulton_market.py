@@ -433,23 +433,25 @@ class FultonMarket():
         from chimpss.fultonmarket.trailblaze import (
             RECORD_NAME,
             OpenMMRungSampler,
-            Trailblazer,
             TrailblazeRecord,
+            run_trailblaze,
             split_kwargs,
         )
         os.makedirs(self.trailblaze_dir, exist_ok=True)
         cached = TrailblazeRecord.load_if_complete(os.path.join(self.trailblaze_dir, RECORD_NAME))
         if cached is not None:
-            printf(f'trailblaze: using the cached ladder of {len(cached.rungs)} rungs in {self.trailblaze_dir}')
+            printf(f'trailblaze: using the cached {cached.direction} ladder of {len(cached.rungs)} rungs in '
+                   f'{self.trailblaze_dir}')
             return cached.temperatures.tolist(), cached.meta
         if not hasattr(self, 'context'):
             raise RuntimeError('ladder=trailblaze needs input_state: the walk starts from its configuration')
         sampler_kwargs, walk_kwargs = split_kwargs(self.trailblaze_kwargs)
         sampler = OpenMMRungSampler(self.system, dt_fs=self.dt, **sampler_kwargs)
         seed = sampler.seed_from_sampler_state(SamplerState.from_context(self.context))
-        walker = Trailblazer(sampler, self.T_min, self.T_max, out_dir=self.trailblaze_dir, printf=printf,
+        # direction 'up' (default) or 'down' is one walk; 'both' walks up, then down from the hot
+        # end, and reconciles the two into the ladder and seeds FultonMarket reads from trailblaze/
+        rec = run_trailblaze(sampler, self.T_min, self.T_max, seed, out_dir=self.trailblaze_dir, printf=printf,
                              **walk_kwargs)
-        rec = walker.run(seed)
         return rec.temperatures.tolist(), rec.meta
 
     def trailblaze(self, output_dir: str, dt: float = 2.0):

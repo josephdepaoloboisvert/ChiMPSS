@@ -59,6 +59,8 @@ __all__ = [
     'load_ladder_file', 'Seed', 'Rung', 'TrailblazeRecord', 'SeedStore', 'Trailblazer',
     'OpenMMRungSampler', 'RECORD_NAME', 'LADDER_NAME', 'SEED_DIR', 'LADDER_MODES',
     'DIRECTIONS', 'DIRECTION_SIGN', 'SAMPLER_KEYS', 'WALK_KEYS', 'split_kwargs',
+    'ramp_stages', 'inputs_match', 'LEGACY_INPUT_DEFAULTS', 'WALK_PREFIX',
+    'run_trailblaze', 'reconcile', 'UP_DIR', 'DOWN_DIR', 'RECONCILE_NAME', 'RECONCILE_KEYS',
 ]
 
 #: Boltzmann constant in kJ/(mol K); equals ``openmmtools.constants.kB``.
@@ -843,6 +845,274 @@ class Trailblazer:
             else f' (step {r.sigma_step:.0f})'
         self.printf(f'trailblaze: rung {index:3d}  {r.T:8.3f} K  sigma_H {r.sigma:7.1f}{pooled} kJ/mol  '
                     f'n {r.n_samples} neff {r.neff:.0f}{acc}{rej}  {r.wall_s:.0f} s')
+
+
+# ---------------------------------------------------------------------------
+# Both directions: run up, run down from the hot end, reconcile
+# ---------------------------------------------------------------------------
+
+UP_DIR = 'up'
+DOWN_DIR = 'down'
+RECONCILE_NAME = 'reconcile.json'
+#: Inputs two walks must share before their profiles are merged.
+RECONCILE_KEYS = ('T_min', 'T_max', 'target_acc', 'min_acc', 'max_acc', 'dL')
+
+
+def run_trailblaze(sampler: RungSampler, T_min: float, T_max: float, initial_seed: Seed,
+                   out_dir: Optional[str] = None, direction: Optional[str] = None,
+                   printf: Callable = print, **walk_kwargs) -> TrailblazeRecord:
+    """Build the ladder in one direction, or both directions reconciled.
+
+    ``'up'`` and ``'down'`` run one :class:`Trailblazer`.  ``'both'`` runs the
+    up walk into ``<out_dir>/up``, then the down walk into ``<out_dir>/down``
+    seeded from the up walk's hottest rung (already equilibrated at ``T_max``,
+    so no heating ramp), and :func:`reconcile` writes the consensus ladder and
+    its seeds into ``out_dir`` itself, where FultonMarket reads them.  Each
+    walk is resumable; a complete consensus record is returned as is.
+    """
+    walk_kwargs = dict(walk_kwargs)
+    direction = direction or walk_kwargs.pop('direction', 'up')
+    walk_kwargs.pop('direction', None)
+    if direction not in DIRECTIONS:
+        raise ValueError(f'direction must be one of {DIRECTIONS}, got {direction!r}')
+    if direction != 'both':
+        return Trailblazer(sampler, T_min, T_max, out_dir=out_dir, printf=printf, direction=direction,
+                           **walk_kwargs).run(initial_seed)
+    if not out_dir:
+        raise ValueError("direction='both' needs out_dir: the two walks and the consensus are files")
+    cached = TrailblazeRecord.load_if_complete(os.path.join(out_dir, RECORD_NAME))
+    if cached is not None:
+        if cached.direction != 'both':
+            printf(f'trailblaze: NOTE a complete {cached.direction} ladder is cached in {out_dir}; using it')
+        else:
+            printf(f'trailblaze: complete reconciled ladder of {len(cached.rungs)} rungs found in {out_dir}')
+        return cached
+    up_dir, down_dir = os.path.join(out_dir, UP_DIR), os.path.join(out_dir, DOWN_DIR)
+    up = Trailblazer(sampler, T_min, T_max, out_dir=up_dir, printf=printf, direction='up',
+                     **walk_kwargs).run(initial_seed)
+    hot_seed, _ = SeedStore(up_dir).load(len(up.rungs) - 1)
+    down = Trailblazer(sampler, T_min, T_max, out_dir=down_dir, printf=printf, direction='down',
+                       seed_from=float(T_max), **walk_kwargs).run(hot_seed)
+    rec, _ = reconcile(up, down, out_dir, up_dir=up_dir, down_dir=down_dir, printf=printf)
+    return rec
+
+
+def _profile(rec: TrailblazeRecord) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """``(T, sigma, neff, mean_H)`` of a complete record, ascending."""
+    T = rec.temperatures
+    s = np.array([r.sigma for r in rec.rungs], dtype=np.float64)
+    neff = np.array([max(r.neff, 1.0) for r in rec.rungs], dtype=np.float64)
+    H = np.array([r.mean_H for r in rec.rungs], dtype=np.float64)
+    return T, s, neff, H
+
+
+def _interp_profile(T: np.ndarray, y: np.ndarray) -> Callable[[np.ndarray], np.ndarray]:
+    """Linear interpolation of a profile that may hold repeated temperatures (averaged)."""
+    Tu, inv = np.unique(T, return_inverse=True)
+    yu = np.array([y[inv == i].mean() for i in range(Tu.size)])
+    return lambda x: np.interp(x, Tu, yu)
+
+
+def _jsonable(obj):
+    if isinstance(obj, dict):
+        return {str(k): _jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_jsonable(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return [_jsonable(v) for v in obj.tolist()]
+    if isinstance(obj, (np.floating, float)):
+        v = float(obj)
+        return v if np.isfinite(v) else None
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    return obj
+
+
+def reconcile(up: TrailblazeRecord, down: TrailblazeRecord, out_dir: str, up_dir: Optional[str] = None,
+              down_dir: Optional[str] = None, target_acc: Optional[float] = None, printf: Callable = print,
+              n_fine: int = 4000) -> Tuple[TrailblazeRecord, Dict[str, object]]:
+    """Merge an up walk and a down walk into one ladder placed by equal thermodynamic length.
+
+    The two walks' per-rung ``sigma_H`` estimates are pooled into one
+    ``C_V(T) = a + bT`` fit (``chimpss.analysis.ladder.smooth_sigma``, weighted
+    by effective samples), and the rungs are placed by integrating that
+    metric (``respace``): the direction-free placement both walks approximate
+    one step at a time.  Each rung is seeded from the nearest rung of the
+    **down** walk, whose configurations were annealed from an equilibrated
+    hot one, with velocities rescaled to the rung temperature; its measured
+    acceptance comes from the two source rungs' samples reweighted to the
+    consensus temperatures.
+
+    Writes ``seeds/rung_XXX.npz``, ``trailblaze.json`` (a complete record
+    whose inputs say ``direction='both'``), ``reconcile.json`` (the
+    diagnostics: both walks' counts, the hysteresis between their fitted
+    metrics and mean enthalpies, every ladder's pair lengths on the merged
+    metric) and finally ``temperatures.npy``.  Returns the record and the
+    diagnostics.
+    """
+    from chimpss.analysis.ladder import cumulative_length, respace, smooth_sigma
+
+    for rec, name in ((up, 'up'), (down, 'down')):
+        if not rec.complete:
+            raise ValueError(f'the {name} walk is not complete')
+        if np.any(np.diff(rec.temperatures) <= 0):
+            raise ValueError(f'the {name} record is not ascending in temperature')
+    for k in RECONCILE_KEYS:
+        if up.inputs.get(k) != down.inputs.get(k):
+            raise ValueError(f'the walks disagree on {k}: up {up.inputs.get(k)!r}, down {down.inputs.get(k)!r}')
+    for k in set(up.inputs) | set(down.inputs):
+        if k in RECONCILE_KEYS or k == 'direction':
+            continue
+        if up.inputs.get(k) != down.inputs.get(k):
+            printf(f'reconcile: NOTE the walks differ in {k}: up {up.inputs.get(k)!r}, down {down.inputs.get(k)!r}')
+    T_min, T_max = float(up.inputs['T_min']), float(up.inputs['T_max'])
+    if target_acc is None:
+        target_acc = float(up.inputs['target_acc'])
+    dL_target = float(target_spacing(target_acc))
+
+    # -- the merged metric ---------------------------------------------------
+    T_u, s_u, n_u, H_u = _profile(up)
+    T_d, s_d, n_d, H_d = _profile(down)
+    T_all = np.concatenate([T_u, T_d])
+    order = np.argsort(T_all, kind='stable')
+    T_all, s_all = T_all[order], np.concatenate([s_u, s_d])[order]
+    n_all = np.concatenate([n_u, n_d])[order]
+    s_fit_all, fit = smooth_sigma(T_all, s_all, n_samples=n_all, model='cv_linear')
+    if fit.get('model') == 'cv_linear':
+        a, b = fit['a'], fit['b']
+        sigma_fn = lambda x: KB * np.asarray(x, dtype=np.float64) * np.sqrt(a + b * np.asarray(x, dtype=np.float64))  # noqa: E731
+    else:
+        printf(f"reconcile: WARNING the linear C_V fit failed ({fit.get('reason')}); interpolating the two profiles")
+        sigma_fn = _interp_profile(T_all, s_all)
+    T_grid = np.linspace(T_min, T_max, int(n_fine))
+    rs = respace(T_grid, sigma_fn(T_grid), target_acceptance=target_acc)
+    T_c = np.asarray(rs['temperatures'], dtype=np.float64)
+    K = T_c.size
+
+    # -- diagnostics ----------------------------------------------------------
+    def ladder_on_metric(T_lad):
+        dl = pair_lengths(T_lad, sigma_fn(T_lad))
+        A = predicted_acceptance(dl)
+        return {'n_rungs': int(T_lad.size), 'dL_mean': float(dl.mean()), 'dL_min': float(dl.min()),
+                'dL_max': float(dl.max()), 'dL_cv': float(dl.std() / dl.mean()), 'L_total': float(dl.sum()),
+                'acc_pred_min': float(A.min()), 'acc_pred_mean': float(A.mean()), 'acc_pred_max': float(A.max())}
+
+    def measured(rec):
+        acc = rec.pair_acc()
+        acc = acc[np.isfinite(acc)]
+        return {'acc_min': float(acc.min()) if acc.size else None, 'acc_median': float(np.median(acc)) if acc.size else None,
+                'acc_mean': float(acc.mean()) if acc.size else None, 'n_rejected': len(rec.rejected),
+                'wall_s': float(sum(r.wall_s for r in rec.rungs) + float(rec.prepare.get('wall_s', 0.0)))}
+
+    fit_u_sigma, fit_u = smooth_sigma(T_u, s_u, n_samples=n_u, model='cv_linear')
+    fit_d_sigma, fit_d = smooth_sigma(T_d, s_d, n_samples=n_d, model='cv_linear')
+    fn_u = _interp_profile(T_u, fit_u_sigma)
+    fn_d = _interp_profile(T_d, fit_d_sigma)
+    T_h = np.linspace(T_min, T_max, 200)
+    s_h = sigma_fn(T_h)
+    sigma_hyst = (fn_u(T_h) - fn_d(T_h)) / s_h
+    raw_hyst = (_interp_profile(T_u, s_u)(T_h) - _interp_profile(T_d, s_d)(T_h)) / s_h
+    H_hyst = (_interp_profile(T_u, H_u)(T_h) - _interp_profile(T_d, H_d)(T_h)) / s_h
+    L_u = float(cumulative_length(T_h, fn_u(T_h))[-1])
+    L_d = float(cumulative_length(T_h, fn_d(T_h))[-1])
+    diagnostics = {
+        'target_acc': target_acc, 'dL_target': dL_target, 'T_min': T_min, 'T_max': T_max,
+        'K_up': int(T_u.size), 'K_down': int(T_d.size), 'K_consensus': int(K),
+        'fit': dict(fit), 'fit_up': dict(fit_u), 'fit_down': dict(fit_d),
+        'L_total_merged': float(rs['L_total']), 'L_total_up_fit': L_u, 'L_total_down_fit': L_d,
+        'hysteresis': {
+            'sigma_fit_rel_max': float(np.max(np.abs(sigma_hyst))), 'sigma_fit_rel_mean': float(np.mean(sigma_hyst)),
+            'sigma_fit_rel_mean_abs': float(np.mean(np.abs(sigma_hyst))),
+            'sigma_raw_rel_max': float(np.max(np.abs(raw_hyst))), 'sigma_raw_rel_mean_abs': float(np.mean(np.abs(raw_hyst))),
+            'mean_H_over_sigma_max': float(np.max(np.abs(H_hyst))), 'mean_H_over_sigma_mean': float(np.mean(H_hyst)),
+            'L_total_up_minus_down': L_u - L_d,
+            'expected_sigma_noise': float(np.mean(1.0 / np.sqrt(2.0 * np.maximum(n_all - 1.0, 1.0)))),
+        },
+        'ladders': {
+            'up': {**ladder_on_metric(T_u), **measured(up), 'temperatures': T_u},
+            'down': {**ladder_on_metric(T_d), **measured(down), 'temperatures': T_d},
+            'consensus': {**ladder_on_metric(T_c), 'temperatures': T_c},
+        },
+        'profiles': {'up': {'T': T_u, 'sigma': s_u, 'neff': n_u, 'mean_H': H_u},
+                     'down': {'T': T_d, 'sigma': s_d, 'neff': n_d, 'mean_H': H_d},
+                     'fit_grid': {'T': T_h, 'sigma': s_h}},
+    }
+
+    # -- seeds from the down walk, acceptance from reweighted source samples ----------------
+    src_store = SeedStore(down_dir) if down_dir else None
+    out_store = SeedStore(out_dir)
+    nearest = np.array([int(np.argmin(np.abs(T_d - t))) for t in T_c])
+    shared = [int(k) for k in range(1, K) if nearest[k] == nearest[k - 1]]
+    H_cache: Dict[int, np.ndarray] = {}
+
+    def samples(j):
+        if j not in H_cache:
+            if src_store is not None and os.path.exists(src_store.path(j)):
+                H_cache[j] = src_store.load(j)[1]
+            elif down.rungs[j].seed_path and os.path.exists(down.rungs[j].seed_path):
+                with np.load(down.rungs[j].seed_path) as z:
+                    H_cache[j] = z['H'].astype(np.float64)
+            else:
+                H_cache[j] = None
+        return H_cache[j]
+
+    rungs: List[Rung] = []
+    acc_ess = []
+    pair_dL = np.asarray(rs['pair_dL'], dtype=np.float64)
+    for k in range(K):
+        j = int(nearest[k])
+        src = down.rungs[j]
+        seed_path = None
+        src_path = src_store.path(j) if src_store is not None else src.seed_path
+        if src_path and os.path.exists(src_path):
+            seed_path = out_store.link(k, src_path, velocity_scale=float(np.sqrt(T_c[k] / src.T)))
+        acc = acc_pred = dL = None
+        if k > 0:
+            dL = float(pair_dL[k - 1])
+            acc_pred = float(predicted_acceptance(dL))
+            Hp, Hk = samples(int(nearest[k - 1])), samples(j)
+            if Hp is not None and Hk is not None:
+                acc, ess = pair_acceptance(Hp, Hk, T_c[k - 1], T_c[k], T_o_src=down.rungs[int(nearest[k - 1])].T,
+                                           T_n_src=src.T, return_ess=True)
+                acc_ess.append(float(ess))
+        rungs.append(Rung(T=float(T_c[k]), sigma=float(src.sigma), mean_H=float(src.mean_H), n_samples=int(src.n_samples),
+                          g=float(src.g), neff=float(src.neff), acc_est=acc, acc_pred=acc_pred, dL=dL, step_scale=1.0,
+                          rejects=0, seed_path=seed_path, wall_s=0.0, sigma_fit=float(sigma_fn(T_c[k])),
+                          source='down', source_index=j, source_T=float(src.T)))
+    diagnostics['seed_sources'] = [{'rung': k, 'T': float(T_c[k]), 'source': 'down', 'source_index': int(nearest[k]),
+                                    'source_T': float(T_d[nearest[k]])} for k in range(K)]
+    diagnostics['shared_source_pairs'] = shared
+    diagnostics['acc_ess_fraction_min'] = float(min(acc_ess)) if acc_ess else None
+    accs = np.array([r.acc_est for r in rungs[1:] if r.acc_est is not None], dtype=np.float64)
+    diagnostics['ladders']['consensus'].update({
+        'acc_min': float(accs.min()) if accs.size else None,
+        'acc_median': float(np.median(accs)) if accs.size else None,
+        'acc_mean': float(accs.mean()) if accs.size else None,
+    })
+
+    inputs = dict(up.inputs)
+    inputs['direction'] = 'both'
+    rec = TrailblazeRecord(inputs=inputs, rungs=rungs, rejected=[], complete=True,
+                           prepare={'up': dict(up.prepare), 'down': dict(down.prepare)},
+                           consensus={'up_dir': up_dir, 'down_dir': down_dir, 'K_up': int(T_u.size),
+                                      'K_down': int(T_d.size), 'fit': _jsonable(fit),
+                                      'hysteresis': _jsonable(diagnostics['hysteresis']),
+                                      'shared_source_pairs': shared})
+    os.makedirs(out_dir, exist_ok=True)
+    rec.save(os.path.join(out_dir, RECORD_NAME))
+    tmp = os.path.join(out_dir, f'{RECONCILE_NAME}.tmp.{os.getpid()}')
+    with open(tmp, 'w') as fh:
+        json.dump(_jsonable(diagnostics), fh, indent=1)
+    os.replace(tmp, os.path.join(out_dir, RECONCILE_NAME))
+    np.save(os.path.join(out_dir, LADDER_NAME), T_c)        # last: the stage-04b completion marker
+    h = diagnostics['hysteresis']
+    printf(f"reconcile: up {T_u.size} rungs, down {T_d.size}, consensus {K} at target acceptance {target_acc:.2f}; "
+           f"fitted-metric hysteresis mean {100 * h['sigma_fit_rel_mean']:+.1f} % (max |{100 * h['sigma_fit_rel_max']:.1f}| %), "
+           f"mean-enthalpy lag max {h['mean_H_over_sigma_max']:.2f} sigma; "
+           f"consensus pair acceptance min {diagnostics['ladders']['consensus'].get('acc_min')}")
+    return rec, diagnostics
 
 
 # ---------------------------------------------------------------------------
